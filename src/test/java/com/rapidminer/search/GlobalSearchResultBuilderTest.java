@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -27,7 +27,7 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import com.rapidminer.search.util.GlobalSearchableTextTest;
+import com.rapidminer.search.util.GlobalSearchableTextFakeImpl;
 
 
 /**
@@ -38,23 +38,28 @@ import com.rapidminer.search.util.GlobalSearchableTextTest;
  */
 public class GlobalSearchResultBuilderTest {
 
-
-	private static GlobalSearchableTextTest searchable;
+	private static final int MAX_TRIES = 300;
+	private static GlobalSearchableTextFakeImpl searchable;
 
 	@BeforeClass
 	public static void setup() {
 		GlobalSearchIndexer.INSTANCE.initialize();
 
-		searchable = new GlobalSearchableTextTest();
+		searchable = new GlobalSearchableTextFakeImpl();
 		GlobalSearchRegistry.INSTANCE.registerSearchCategory(searchable);
 	}
 
 	@Before
 	public void waitTillReady() {
+		int i = 0;
 		while (!searchable.isInitialized()) {
 			try {
-				Thread.sleep(100l);
+				Thread.sleep(100L);
 			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			if (i++ > MAX_TRIES) {
+				throw new IllegalStateException("waitTillReady did not complete in time.");
 			}
 		}
 	}
@@ -96,9 +101,9 @@ public class GlobalSearchResultBuilderTest {
 		GlobalSearchResult life = new GlobalSearchResultBuilder("life").runSearch();
 		int expected = 3;
 		Assert.assertEquals("Should have found 3 results for searchQuery 'life'", expected, life.getNumberOfResults());
-		Assert.assertEquals("The ROW info for the first document should be 0", "0", life.getResultDocuments().get(0).get(GlobalSearchableTextTest.ROW));
-		Assert.assertEquals("The ROW info for the second document should be 13", "13", life.getResultDocuments().get(1).get(GlobalSearchableTextTest.ROW));
-		Assert.assertEquals("The ROW info for the third document should be 38", "38", life.getResultDocuments().get(2).get(GlobalSearchableTextTest.ROW));
+		Assert.assertEquals("The ROW info for the first document should be 32", "32", life.getResultDocuments().get(0).get(GlobalSearchableTextFakeImpl.ROW));
+		Assert.assertEquals("The ROW info for the second document should be 36", "36", life.getResultDocuments().get(1).get(GlobalSearchableTextFakeImpl.ROW));
+		Assert.assertEquals("The ROW info for the third document should be 57", "57", life.getResultDocuments().get(2).get(GlobalSearchableTextFakeImpl.ROW));
 	}
 
 	@Test(expected = IllegalArgumentException.class)

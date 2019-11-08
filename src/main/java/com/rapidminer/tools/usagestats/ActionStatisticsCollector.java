@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -24,6 +24,9 @@ import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.EnumSet;
@@ -32,6 +35,8 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -48,20 +53,27 @@ import org.w3c.dom.NodeList;
 import com.rapidminer.Process;
 import com.rapidminer.ProcessListener;
 import com.rapidminer.RapidMiner;
+import com.rapidminer.connection.ConnectionInformation;
+import com.rapidminer.connection.configuration.ConnectionConfiguration;
+import com.rapidminer.connection.valueprovider.ValueProvider;
 import com.rapidminer.example.ExampleSet;
 import com.rapidminer.gui.RapidMinerGUI;
 import com.rapidminer.gui.tools.ResourceAction;
 import com.rapidminer.gui.tools.components.AbstractLinkButton;
-import com.rapidminer.io.process.AutoModelProcessXMLFilter;
+import com.rapidminer.io.process.ProcessOriginProcessXMLFilter;
 import com.rapidminer.io.process.XMLTools;
 import com.rapidminer.operator.IOObject;
 import com.rapidminer.operator.Operator;
+import com.rapidminer.operator.OperatorException;
 import com.rapidminer.operator.ProcessStoppedException;
 import com.rapidminer.operator.UserError;
 import com.rapidminer.operator.ports.InputPort;
 import com.rapidminer.operator.ports.OutputPort;
 import com.rapidminer.operator.ports.Port;
+import com.rapidminer.parameter.ParameterType;
 import com.rapidminer.repository.search.RepositoryGlobalSearch;
+import com.rapidminer.settings.Telemetry;
+import com.rapidminer.tools.Tools;
 import com.rapidminer.tools.XMLException;
 import com.rapidminer.tools.container.Pair;
 
@@ -77,6 +89,18 @@ public enum ActionStatisticsCollector {
 
 	INSTANCE;
 
+	/**
+	 * Interface to attach loggable statistics to events/objects with {@link UsageLoggable}
+	 * that might be logged later.
+	 *
+	 * @since 8.1.2
+	 */
+	public static interface UsageObject {
+
+		/** Logs this usage */
+		void logUsage();
+	}
+
 	public static final String TYPE_CONSTANT = "rapidminer";
 	private static final String TYPE_DOCKABLE = "dockable";
 	private static final String TYPE_ACTION = "action";
@@ -85,6 +109,7 @@ public enum ActionStatisticsCollector {
 	public static final String TYPE_ERROR = "error";
 	public static final String TYPE_IMPORT = "import";
 	public static final String TYPE_DIALOG = "dialog";
+	public static final String TYPE_INJECT_VALUE_PROVIDER_DIALOG = "inject_vp_dialog";
 	public static final String TYPE_CONSTRAINT = "constraint";
 	public static final String TYPE_LICENSE_LEVEL = "license-level";
 	public static final String TYPE_PROGRESS_THREAD = "progress-thread";
@@ -100,6 +125,18 @@ public enum ActionStatisticsCollector {
 
 	/** operator search field (since 7.1.1) */
 	public static final String TYPE_OPERATOR_SEARCH = "operator_search";
+
+	/** new operator dialog actions [quick fixes] (since 8.1.2) */
+	public static final String TYPE_NEW_OPERATOR_DIALOG = "new_operator_dialog";
+
+	/** new operator menu actions [right click in process] (since 8.1.2) */
+	public static final String TYPE_NEW_OPERATOR_MENU = "new_operator_menu";
+
+	/** repository tree actions (since 8.1.2) */
+	public static final String TYPE_REPOSITORY_TREE = "repository_tree";
+
+	/** wisdom of crowds actions (since 8.1.2) */
+	public static final String TYPE_WISDOM_OF_CROWDS = "wisdom_of_crowds";
 
 	/** onboarding dialog (since 7.1.1) */
 	public static final String TYPE_ONBOARDING = "onboarding";
@@ -176,6 +213,8 @@ public enum ActionStatisticsCollector {
 
 	/** extension initialization (since 7.3) */
 	public static final String VALUE_EXTENSION_INITIALIZATION = "extension_initialization";
+	/** extension initialization failed (since 9.5) */
+	public static final String VALUE_EXTENSION_INITIALIZATION_FAILED = "extension_initialization_failed";
 
 	/** type cta (since 7.5) */
 	public static final String TYPE_CTA = "cta";
@@ -194,22 +233,76 @@ public enum ActionStatisticsCollector {
 	public static final String ARG_FAILED = "failed";
 	public static final String ARG_STARTED = "started";
 	public static final String ARG_STOPPED = "stopped";
+	public static final String ARG_SPACER = "|";
 	public static final String VALUE_CTA_LIMIT = "limit";
 	public static final String ARG_CTA_LIMIT_DELETED_EVENTS = "deleted_events";
 	public static final String ARG_CTA_LIMIT_DECREASED_TIMEFRAME = "decreased_timeframe";
 	public static final String VALUE_MODE = "mode";
 	public static final String VALUE_CONSTANT_START = "start";
 
+	/** introduced in 8.1.2 for the new FeedbackForm */
+	private static final String TYPE_FEEDBACK = "feedback";
+	private static final String ARG_FEEDBACK_SPACER = ARG_SPACER;
+
 	/** introduced in 8.1 for the new Global Search */
 	private static final String TYPE_GLOBAL_SEARCH = "global_search";
 	public static final String VALUE_TIMEOUT = "timeout";
 	public static final String VALUE_FOCUS_LOST = "focus_lost";
 	public static final String VALUE_ACTION = "action";
-	public static final String ARG_GLOBAL_SEARCH_SPACER = "|";
+	public static final String ARG_GLOBAL_SEARCH_SPACER = ARG_SPACER;
 	public static final String ARG_GLOBAL_SEARCH_CATEGORY_ALL = "all";
-	/** introduced in 8.1 */
-	public static final String PREFIX_TYPE_AUTOMODEL_GENERATED = "am_gen_";
-	public static final String PREFIX_TYPE_AUTOMODEL_EXPORTED = "am_exp_";
+
+	/** ab group | number of groups | selected group (since 8.2) */
+	public static final String TYPE_AB_GROUP = "ab_group";
+
+	/** operator / operator_key / double-click|action(open, parameter, rename)|value(primary_parameter_key) (since 8.2) */
+	public static final String ARG_DOUBLE_CLICK = "double-click";
+	public static final String ARG_DOUBLE_CLICK_SEPARATOR = ARG_SPACER;
+	/** operator chain entered */
+	public static final String OPERATOR_ACTION_OPEN = "open";
+	/** primary parameter editor opened */
+	public static final String OPERATOR_ACTION_PRIMARY_PARAMETER = "parameter";
+	/** operator rename started */
+	public static final String OPERATOR_ACTION_RENAME = "rename";
+
+	/** remote_repository | status | uuid (since 8.2.1) */
+	public static final String TYPE_REMOTE_REPOSITORY = "remote_repository";
+	/** remote_repository_saml | status | uuid (since 9.3) */
+	public static final String TYPE_REMOTE_REPOSITORY_SAML = "remote_repository_saml";
+
+	/** new_import | guessed_date_wrong | guessed|choosen (since 9.1) */
+	public static final String VALUE_GUESSED_DATE_FORMAT_RIGHT = "guessed_date_format_right";
+	public static final String VALUE_GUESSED_DATE_FORMAT_WRONG = "guessed_date_format_wrong";
+	public static final String ARG_GUESSED_DATE_SEPARATOR  = ARG_SPACER;
+
+	/** es_view_filter | filter_selected | condition (since 9.1) */
+	public static final String TYPE_EXAMPLESET_VIEW_FILTER = "es_view_filter";
+	public static final String VALUE_FILTER_SELECTED = "filter_selected";
+
+	/** html5_visualization (since 9.2) */
+	public static final String TYPE_HTML5_VISUALIZATION = "html5_visualization";
+	public static final String TYPE_HTML5_VISUALIZATION_BROWSER = "html5_visualization_browser";
+	public static final String VALUE_BROWSER_SETUP_TEST_STARTED = "browser_setup_test_started";
+	public static final String VALUE_BROWSER_SETUP_TEST_FINISHED = "browser_setup_test_finished";
+	public static final String ARG_BROWSER_TEST_BASIC = "basic";
+	public static final String ARG_BROWSER_TEST_EXTENDED = "extended";
+	public static final String VALUE_CHART_CREATION = "chart_creation";
+	public static final String VALUE_CHART_EXPORT = "chart_export";
+	public static final String TYPE_HTML5_VISUALIZATION_CONFIG_UI = "html5_visualization_config_ui";
+	public static final String VALUE_CONFIG_GROUP_EXPANDED = "config_group_expanded";
+
+	/** connections (since 9.3) */
+	public static final String TYPE_CONNECTION = "connection";
+	public static final String TYPE_CONNECTION_TEST = "connection_test";
+	public static final String TYPE_OLD_CONNECTION = "old_connection";
+	public static final String TYPE_CONNECTION_INJECTION = "connection_injection";
+
+	public static final String VALUE_CREATED = "created";
+	public static final String VALUE_CONNECTED = "connected";
+	public static final String VALUE_CONNECTION_ERROR = "connection_error";
+	public static final String VALUE_DISCONNECTED = "disconnected";
+	public static final String VALUE_REMOVED = "removed";
+	public static final String ARG_REMOTE_REPOSITORY_SEPARATOR  = ARG_SPACER;
 
 	/** conversion constant for bytes to megabytes */
 	private static final int BYTE_TO_MB = 1024 * 1024;
@@ -220,6 +313,28 @@ public enum ActionStatisticsCollector {
 	private static final boolean DISABLED = RapidMiner.getExecutionMode().isHeadless()
 			&& RapidMiner.getExecutionMode() != RapidMiner.ExecutionMode.COMMAND_LINE;
 
+
+	/**
+	 * Log user feedback via the FeedbackForm. Format for the logged argument is {id}|{positive/negative}|freetext
+	 *
+	 * @param key
+	 * 		the key for the feedback form
+	 * @param id
+	 * 		the id to specify subgroups for the given feedback key to identify what exactly was rated
+	 * @param submitted
+	 * 		{@code true} if user clicked "Submit" button; {@code false} if user just clicked thumbs-up/down buttons
+	 * @param rating
+	 * 		{positive/negative} rating by the user
+	 * @param freeText
+	 * 		the text the user entered. Will be escaped in this method
+	 * @since 8.1.2
+	 */
+	public void logFeedback(final String key, final String id, final boolean submitted, final String rating, final String freeText) {
+		StringBuilder arg = new StringBuilder();
+		arg.append(rating).append(ARG_FEEDBACK_SPACER);
+		arg.append(Tools.escapeXML(Tools.escape(freeText)));
+		log(TYPE_FEEDBACK, key + ARG_FEEDBACK_SPACER + submitted + ARG_FEEDBACK_SPACER + id, arg.toString());
+	}
 
 	/**
 	 * Log usage of the global search.
@@ -264,6 +379,169 @@ public enum ActionStatisticsCollector {
 		arg.append(myChosenItem);
 		log(TYPE_GLOBAL_SEARCH, VALUE_ACTION, arg.toString());
 	}
+
+	/**
+	 * Logs the guessed and chosen format
+	 *
+	 * @param guessed The guessed date format pattern
+	 * @param chosenFormat The chosen date format
+	 * @since 9.1
+	 */
+	public void logGuessedDateFormat(String guessed, DateFormat chosenFormat) {
+		guessed = guessed != null ? guessed : "";
+		String chosen = (chosenFormat instanceof SimpleDateFormat) ? ((SimpleDateFormat) chosenFormat).toPattern() : "";
+		String value = guessed.equals(chosen) ? VALUE_GUESSED_DATE_FORMAT_RIGHT : VALUE_GUESSED_DATE_FORMAT_WRONG;
+		String argument = guessed.equals(chosen) ? chosen : guessed + ARG_GUESSED_DATE_SEPARATOR + chosen;
+		log(TYPE_NEW_IMPORT, value, argument);
+	}
+
+	/**
+	 * Logs the successful creation of a HTML5 visualization.
+	 *
+	 * @param plotTypes
+	 * 		the list of plot types that were used in the visualization, can be empty but never {@code null}
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationSuccess(List<String> plotTypes) {
+		StringBuilder arg = new StringBuilder();
+		arg.append(ARG_SUCCESS).append(ARG_SPACER);
+		arg.append(String.join(",", plotTypes));
+		log(TYPE_HTML5_VISUALIZATION, VALUE_CHART_CREATION, arg.toString());
+	}
+
+	/**
+	 * Logs the successful creation of a HTML5 visualization.
+	 *
+	 * @param plotTypes
+	 * 		the list of plot types that were used in the visualization, can be empty but never {@code null}
+	 * @param fileExtension
+	 * 		the file extension (e.g. "pdf", "png", etc)
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationExport(List<String> plotTypes, String fileExtension) {
+		StringBuilder arg = new StringBuilder();
+		arg.append(fileExtension).append(ARG_SPACER);
+		arg.append(String.join(",", plotTypes));
+		log(TYPE_HTML5_VISUALIZATION, VALUE_CHART_EXPORT, arg.toString());
+	}
+
+	/**
+	 * Called when an HTML5 visualization could not be created due to misconfiguration by the user.
+	 *
+	 * @param plotTypes
+	 * 		the list of plot types that were used in the visualization, can be empty but never {@code null}
+	 * @param e
+	 * 		the chart configuration/generation exception
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationFailure(List<String> plotTypes, Exception e) {
+		StringBuilder arg = new StringBuilder();
+		arg.append(ARG_FAILED).append(ARG_SPACER);
+		arg.append(String.join(",", plotTypes)).append(ARG_SPACER);
+		arg.append(e.getMessage());
+		log(TYPE_HTML5_VISUALIZATION, VALUE_CHART_CREATION, arg.toString());
+	}
+
+	/**
+	 * Called when an HTML5 visualization could not be created due to an unexpected exception.
+	 *
+	 * @param plotTypes
+	 * 		the list of plot types that were used in the visualization, can be empty but never {@code null}
+	 * @param t
+	 * 		the unexpected throwable
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationException(List<String> plotTypes, Throwable t) {
+		StringBuilder exception = new StringBuilder();
+		exception.append("ex").append(ARG_SPACER);
+		exception.append(t.getClass()).append(ARG_SPACER);
+		exception.append(getThrowableStackTraceAsString(t));
+
+		StringBuilder arg = new StringBuilder();
+		arg.append(String.join(",", plotTypes)).append(ARG_SPACER);
+		arg.append(exception.toString());
+		log(TYPE_HTML5_VISUALIZATION, VALUE_EXCEPTION, arg.toString());
+	}
+
+	/**
+	 * Called when an HTML5 visualization could not be displayed in the browser due to an unexpected exception.
+	 *
+	 * @param t
+	 * 		the unexpected throwable
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationBrowserException(Throwable t) {
+		StringBuilder exception = new StringBuilder();
+		exception.append("ex").append(ARG_SPACER);
+		exception.append(t.getClass()).append(ARG_SPACER);
+		exception.append(t.getMessage()).append(ARG_SPACER);
+		exception.append(getThrowableStackTraceAsString(t));
+
+		StringBuilder arg = new StringBuilder();
+		arg.append(exception.toString());
+		log(TYPE_HTML5_VISUALIZATION_BROWSER, VALUE_EXCEPTION, arg.toString());
+	}
+
+	/**
+	 * Called when the setup test of the HTML5 browser is started. Note that this will be logged all the time, but the
+	 * finish (either success or failure) will only be logged when the JVM does not crash during the test.
+	 *
+	 * @param type
+	 * 		the type (basic vs extended)
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationBrowserSetupTestStarted(String type) {
+		log(TYPE_HTML5_VISUALIZATION_BROWSER, VALUE_BROWSER_SETUP_TEST_STARTED, type);
+	}
+
+	/**
+	 * Called when the setup test of the HTML5 browser is done, both in case of success and failure. Note that the start
+	 * will be logged all the time, but this (no matter if success or failure) will only be logged when the JVM does not
+	 * crash during the test.
+	 *
+	 * @param type
+	 * 		the type (basic vs extended)
+	 * @param success
+	 * 		{@code true} if the browser setup test was successful; {@code false} otherwise
+	 * @since 9.2.0
+	 */
+	public void logHTML5VisualizationBrowserSetupTestFinished(String type, boolean success) {
+		StringBuilder arg = new StringBuilder();
+		arg.append(success ? ARG_SUCCESS : ARG_FAILED).append(ARG_SPACER);
+		arg.append(type);
+		log(TYPE_HTML5_VISUALIZATION_BROWSER, VALUE_BROWSER_SETUP_TEST_FINISHED, arg.toString());
+	}
+
+	/**
+	 * Logs the usage of a connection in an operator.
+	 *
+	 * @param operator
+	 * 		the operator where the connection is used
+	 * @param connection
+	 * 		the connection used in the operator
+	 * @since 9.3.0
+	 */
+	public void logNewConnection(Operator operator, ConnectionInformation connection) {
+		log(ActionStatisticsCollector.TYPE_OPERATOR, operator.getOperatorDescription().getKey(),
+				TYPE_CONNECTION + ARG_SPACER + connection.getConfiguration().getType() + ARG_SPACER
+						+ getConnectionInjections(connection.getConfiguration()));
+	}
+
+	/**
+	 * Logs the usage of an old connection (configurable or database connection configuration) in an operator.
+	 *
+	 * @param operator
+	 * 		the operator where the old connection is used
+	 * @param oldConnectionType
+	 * 		the type of the old connection
+	 * @since 9.3.0
+	 */
+	public void logOldConnection(Operator operator, String oldConnectionType) {
+		log(ActionStatisticsCollector.TYPE_OPERATOR, operator.getOperatorDescription().getKey(),
+				TYPE_OLD_CONNECTION + ARG_SPACER + oldConnectionType);
+	}
+
+
 
 	/**
 	 * A Key defines an identifier that is used to store some collected usage data associated with it. It has 3 levels,
@@ -654,7 +932,43 @@ public enum ActionStatisticsCollector {
 	 * @return
 	 */
 	public static String getExceptionStackTraceAsString(Exception e) {
-		return Stream.of(e.getStackTrace()).limit(40).map(StackTraceElement::toString).collect(Collectors.joining(","));
+		return getThrowableStackTraceAsString(e);
+	}
+
+	/**
+	 * Transforms an exception stacktrace into a String
+	 *
+	 * @param t
+	 * 		the throwable, must not be {@code null}
+	 * @return the stacktrace, never {@code null}
+	 * @since 9.2.0
+	 */
+	public static String getThrowableStackTraceAsString(Throwable t) {
+		if (t == null) {
+			throw new IllegalArgumentException("t must not be null!");
+		}
+
+		return Stream.of(t.getStackTrace()).limit(40).map(StackTraceElement::toString).collect(Collectors.joining(","
+		));
+	}
+
+	/**
+	 * Creates a string from the injections for the given connection configuration as the comma-separated injection
+	 * sources followed by {@code |} followed by the comma-separated injection parameter names.
+	 *
+	 * @param configuration
+	 * 		the configuration of a connection
+	 * @return the injections of the form {@code source1,source2|param1,param2,param3}
+	 */
+	public static String getConnectionInjections(ConnectionConfiguration configuration) {
+		String injectionSources = configuration.getValueProviders().stream()
+				.map(ValueProvider::getType)
+				.collect(Collectors.joining(","	));
+		String injectedParameters =	configuration.getKeyMap().entrySet().stream()
+				.filter(e -> e.getValue().isInjected())
+				.map(Entry::getKey)
+				.collect(Collectors.joining(","));
+		return injectionSources + ARG_SPACER + injectedParameters;
 	}
 
 	/** Listener that logs input and output volume at operator ports. */
@@ -764,10 +1078,10 @@ public enum ActionStatisticsCollector {
 				Object source = actionEvent.getSource();
 				if (source != null) {
 					arg.append(source.getClass().getName());
-					arg.append("|");
+					arg.append(ARG_SPACER);
 					arg.append(actionCommand);
 					if (source instanceof AbstractButton) {
-						arg.append("|");
+						arg.append(ARG_SPACER);
 						arg.append(((AbstractButton) source).isSelected());
 					}
 				}
@@ -810,23 +1124,13 @@ public enum ActionStatisticsCollector {
 		}
 	}
 
-	private static String prefixAutoModelUsage(Operator operator) {
+	private static String prefixProcessOriginUsage(Operator operator) {
 		if (operator == null) {
 			return "";
 		}
 
-		AutoModelProcessXMLFilter.AutoModelState autoModelState = AutoModelProcessXMLFilter.getAutoModelState(operator);
-		if (autoModelState == null) {
-			return "";
-		}
-		switch (autoModelState) {
-			case GENERATED:
-				return PREFIX_TYPE_AUTOMODEL_GENERATED;
-			case EXPORTED:
-				return PREFIX_TYPE_AUTOMODEL_EXPORTED;
-			default:
-				return "";
-		}
+		ProcessOriginProcessXMLFilter.ProcessOriginState processOriginState = ProcessOriginProcessXMLFilter.getProcessOriginState(operator);
+		return processOriginState != null ? processOriginState.getPrefix() : "";
 	}
 
 	/**
@@ -841,7 +1145,7 @@ public enum ActionStatisticsCollector {
 			return;
 		}
 
-		String autoModelPrefix = prefixAutoModelUsage(process.getRootOperator());
+		String processOriginPrefix = prefixProcessOriginUsage(process.getRootOperator());
 
 		// add listener for operator port volume logging
 		process.getRootOperator().addProcessListener(operatorVolumeListener);
@@ -853,26 +1157,26 @@ public enum ActionStatisticsCollector {
 				++size;
 			}
 		}
-		log(autoModelPrefix + TYPE_PROCESS, VALUE_OPERATOR_COUNT, Integer.toString(size));
-		startTimer(process, autoModelPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_RUNTIME);
+		log(processOriginPrefix + TYPE_PROCESS, VALUE_OPERATOR_COUNT, Integer.toString(size));
+		startTimer(process, processOriginPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_RUNTIME);
 	}
 
 	/**
 	 * Logs process execution success
 	 */
 	public void logExecutionSuccess(Process process) {
-		String autoModelPrefix = prefixAutoModelUsage(process.getRootOperator());
+		String processOriginPrefix = prefixProcessOriginUsage(process.getRootOperator());
 
-		log(autoModelPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_SUCCESS);
+		log(processOriginPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_SUCCESS);
 	}
 
 	/**
 	 * Logs process execution start
 	 */
 	public void logExecutionStarted(Process process) {
-		String autoModelPrefix = prefixAutoModelUsage(process.getRootOperator());
+		String processOriginPrefix = prefixProcessOriginUsage(process.getRootOperator());
 
-		log(autoModelPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_STARTED);
+		log(processOriginPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_STARTED);
 	}
 
 	/**
@@ -886,30 +1190,32 @@ public enum ActionStatisticsCollector {
 	 *             The exception to be logged.
 	 */
 	public void logExecutionException(Process process, Exception e) {
-		String autoModelPrefix = prefixAutoModelUsage(process.getRootOperator());
-
+		final String type = prefixProcessOriginUsage(process.getRootOperator()) + TYPE_PROCESS;
 		if (e instanceof ProcessStoppedException) {
-			log(autoModelPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_STOPPED);
+			log(type, VALUE_EXECUTION, ARG_STOPPED);
 		} else {
-			log(autoModelPrefix + TYPE_PROCESS, VALUE_EXECUTION, ARG_FAILED);
-			StringBuilder exception = new StringBuilder();
+			log(type, VALUE_EXECUTION, ARG_FAILED);
+			String[] arg = new String[5];
+			Arrays.fill(arg, "");
 			if (process.getCurrentOperator() != null) {
-				exception.append(process.getCurrentOperator().getOperatorDescription().getKey());
+				arg[0] = process.getCurrentOperator().getOperatorDescription().getKey();
 			}
 			if (e instanceof UserError) {
 				UserError ue = (UserError) e;
-				exception.append("|ue|");
-				exception.append(ue.getErrorName());
-				exception.append("|");
-				exception.append(ue.getOperator().getOperatorDescription().getKey());
-				exception.append("|");
+				arg[1] = "ue";
+				arg[2] = ue.getErrorName();
+				arg[3] = ue.getOperator().getOperatorDescription().getKey();
+			} else if (e instanceof OperatorException) {
+				arg[1] = "oe";
+				arg[2] = Objects.toString(((OperatorException) e).getErrorIdentifier(), "");
 			} else {
-				exception.append("|ex|");
-				exception.append(e.getClass());
-				exception.append("||");
+				arg[1] = "ex";
+				arg[2] = e.getClass().toString();
 			}
-			exception.append(getExceptionStackTraceAsString(e));
-			log(autoModelPrefix + TYPE_PROCESS, VALUE_EXCEPTION, exception.toString());
+			// Log a short version without the stacktrace
+			CtaEventAggregator.INSTANCE.logBlacklistedKey(new Key(type, VALUE_EXCEPTION, String.join(ARG_SPACER, arg)), 1);
+			arg[4] = getExceptionStackTraceAsString(e);
+			log(type, VALUE_EXCEPTION, String.join(ARG_SPACER, arg));
 		}
 	}
 
@@ -975,9 +1281,9 @@ public enum ActionStatisticsCollector {
 	 *            the columns of the example set at the port
 	 */
 	private void logInputVolume(Operator operator, InputPort port, int rows, int columns) {
-		String autoModelPrefix = prefixAutoModelUsage(operator);
+		String processOriginPrefix = prefixProcessOriginUsage(operator);
 
-		logVolume(autoModelPrefix + TYPE_INPUT_VOLUME, operator, port, rows, columns);
+		logVolume(processOriginPrefix + TYPE_INPUT_VOLUME, operator, port, rows, columns);
 	}
 
 	/**
@@ -994,18 +1300,42 @@ public enum ActionStatisticsCollector {
 	 *            the columns of the example set at the port
 	 */
 	private void logOutputVolume(Operator operator, OutputPort port, int rows, int columns) {
-		String autoModelPrefix = prefixAutoModelUsage(operator);
+		String processOriginPrefix = prefixProcessOriginUsage(operator);
 
-		logVolume(autoModelPrefix + TYPE_OUTPUT_VOLUME, operator, port, rows, columns);
+		logVolume(processOriginPrefix + TYPE_OUTPUT_VOLUME, operator, port, rows, columns);
+	}
+
+	/**
+	 * Log double click on operator
+	 *
+	 * @param operator
+	 * 		the operator that got double clicked
+	 * @param action
+	 * 		the double click action that got triggered
+	 * @see #OPERATOR_ACTION_OPEN
+	 * @see #OPERATOR_ACTION_PRIMARY_PARAMETER
+	 * @see #OPERATOR_ACTION_RENAME
+	 * @since 8.2
+	 */
+	public void logOperatorDoubleClick(Operator operator, String action) {
+		if (operator == null || action == null) {
+			return;
+		}
+		String value = "";
+		// Log primary parameter key if user triggered the primary parameter action
+		if (OPERATOR_ACTION_PRIMARY_PARAMETER.equals(action)) {
+			value = Optional.ofNullable(operator.getPrimaryParameter()).map(ParameterType::getKey).orElse(value);
+		}
+		log(operator, String.join(ARG_DOUBLE_CLICK_SEPARATOR, ARG_DOUBLE_CLICK, action, value));
 	}
 
 	public void log(Operator op, String event) {
 		if (op == null) {
 			return;
 		}
-		String autoModelPrefix = prefixAutoModelUsage(op);
+		String processOriginPrefix = prefixProcessOriginUsage(op);
 
-		log(autoModelPrefix + TYPE_OPERATOR, op.getOperatorDescription().getKey(), event);
+		log(processOriginPrefix + TYPE_OPERATOR, op.getOperatorDescription().getKey(), event);
 	}
 
 	/** Adds 1 to the aggregated value */
@@ -1023,19 +1353,19 @@ public enum ActionStatisticsCollector {
 	 *            the execution time (in milliseconds) to log
 	 */
 	private void logOperatorExecutionTime(Operator operator, long executionTime) {
-		String autoModelPrefix = prefixAutoModelUsage(operator);
+		String processOriginPrefix = prefixProcessOriginUsage(operator);
 
-		logCountSumMinMax(autoModelPrefix + TYPE_OPERATOR, operator.getOperatorDescription().getKey(), OPERATOR_RUNTIME, executionTime);
+		logCountSumMinMax(processOriginPrefix + TYPE_OPERATOR, operator.getOperatorDescription().getKey(), OPERATOR_RUNTIME, executionTime);
 	}
 
 	/**
 	 * Logs sum, max and count of the total memory currently used.
 	 */
 	private void logMemory(Process process) {
-		String autoModelPrefix = prefixAutoModelUsage(process.getRootOperator());
+		String processOriginPrefix = prefixProcessOriginUsage(process.getRootOperator());
 
 		long totalSize = Runtime.getRuntime().totalMemory() / BYTE_TO_MB;
-		Key key = new Key(autoModelPrefix + TYPE_MEMORY, MEMORY_USED, MEMORY_ARG);
+		Key key = new Key(processOriginPrefix + TYPE_MEMORY, MEMORY_USED, MEMORY_ARG);
 		log(key, totalSize);
 		logMax(key, totalSize);
 		logCount(key, totalSize);
@@ -1056,7 +1386,7 @@ public enum ActionStatisticsCollector {
 	 * For the key given by TYPE, VALUE and ARG logs the amount, its minimum and maximum and how
 	 * often a amount was logged.
 	 */
-	void logCountSumMinMax(String type, String value, String arg, long data) {
+	public void logCountSumMinMax(String type, String value, String arg, long data) {
 		Key key = new Key(type, value, arg);
 		log(key, data);
 		logMin(key, data);
@@ -1067,14 +1397,14 @@ public enum ActionStatisticsCollector {
 	/**
 	 * For the key given by type, value and arg logs the minimum and maximum amount.
 	 */
-	void logMinMax(String type, String value, String arg, long data) {
+	public void logMinMax(String type, String value, String arg, long data) {
 		Key key = new Key(type, value, arg);
 		logMin(key, data);
 		logMax(key, data);
 	}
 
 	private void log(Key key, long data) {
-		if (DISABLED) {
+		if (isDisabled()) {
 			return;
 		}
 
@@ -1084,6 +1414,16 @@ public enum ActionStatisticsCollector {
 		if (key.isAggregatedWith(Key.AggregationIndicator.SUM) || key.isAggregatedWith(Key.AggregationIndicator.COUNT)) {
 			CtaEventAggregator.INSTANCE.log(key, data);
 		}
+	}
+
+	/**
+	 * Check if the ActionStatisticsCollector was disabled for some reason.
+	 *
+	 * @return true if actions should not be collected
+	 * @since 9.0.0
+	 */
+	private boolean isDisabled() {
+		return DISABLED || Telemetry.USAGESTATS.isDenied();
 	}
 
 	/**
@@ -1128,7 +1468,7 @@ public enum ActionStatisticsCollector {
 	 * @param arg
 	 */
 	public void startTimer(String type, String value, String arg) {
-		if (DISABLED) {
+		if (isDisabled()) {
 			return;
 		}
 
@@ -1153,7 +1493,7 @@ public enum ActionStatisticsCollector {
 	 * @param arg
 	 */
 	public void startTimer(Object id, String type, String value, String arg) {
-		if (DISABLED) {
+		if (isDisabled()) {
 			return;
 		}
 
@@ -1172,7 +1512,7 @@ public enum ActionStatisticsCollector {
 	 * @param arg
 	 */
 	public void stopTimer(String type, String value, String arg) {
-		if (DISABLED) {
+		if (isDisabled()) {
 			return;
 		}
 
@@ -1198,7 +1538,7 @@ public enum ActionStatisticsCollector {
 	 * @param id
 	 */
 	public void stopTimer(Object id) {
-		if (DISABLED) {
+		if (isDisabled()) {
 			return;
 		}
 

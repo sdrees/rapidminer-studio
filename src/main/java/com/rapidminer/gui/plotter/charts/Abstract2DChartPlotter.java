@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -74,7 +74,9 @@ import com.rapidminer.tools.math.MathFunctions;
  * This is the abstract superclass for scatter plotter based on JFreeChart.
  *
  * @author Ingo Mierswa
+ * @deprecated since 9.2.0
  */
+@Deprecated
 public abstract class Abstract2DChartPlotter extends RangeablePlotterAdapter {
 
 	private static final long serialVersionUID = 4568273282283350833L;
@@ -375,8 +377,11 @@ public abstract class Abstract2DChartPlotter extends RangeablePlotterAdapter {
 			synchronized (dataTable) {
 				if (colorColumn >= 0) {
 					for (int v = 0; v < dataTable.getNumberOfValues(colorColumn); v++) {
-						dataCollection.put(dataTable.mapIndex(colorColumn, v), new LinkedList<double[]>());
-						idCollection.put(dataTable.mapIndex(colorColumn, v), new LinkedList<String>());
+						String key = dataTable.mapIndex(colorColumn, v);
+						if(key !=null) {
+							dataCollection.put(key, new LinkedList<>());
+							idCollection.put(key, new LinkedList<>());
+						}
 					}
 				}
 

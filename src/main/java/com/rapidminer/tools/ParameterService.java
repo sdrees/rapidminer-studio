@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -27,13 +27,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.AccessControlException;
 import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
@@ -50,6 +50,7 @@ import com.rapidminer.tools.parameter.ParameterScope;
 import com.rapidminer.tools.parameter.ParameterWriter;
 import com.rapidminer.tools.parameter.WindowsBatParameterWriter;
 import com.rapidminer.tools.parameter.WindowsExeParameterWriter;
+import com.rapidminer.tools.parameter.admin.ParameterEnforcer;
 
 
 /**
@@ -89,10 +90,12 @@ public class ParameterService {
 
 	public static final String ENVIRONMENT_RAPIDMINER_CONFIG_DIR = "RAPIDMINER_CONFIG_DIR";
 
-	private static boolean intialized = false;
+	private static boolean initialized = false;
 	private static final List<ParameterChangeListener> PARAMETER_LISTENERS = new LinkedList<>();
 	private static final Map<String, Parameter> PARAMETER_MAP = new TreeMap<>();
 	private static final List<ParameterWriter> PARAMETER_WRITERS = new LinkedList<>();
+
+	private static final ParameterEnforcer ENFORCED_PARAMETER = new ParameterEnforcer(ParameterService::setParameterValue, ParameterService::getParameterValue, s -> Optional.ofNullable(ParameterService.getParameterType(s)).map(ParameterType::getDefaultValue).map(Object::toString).orElse(""));
 
 	static {
 		PARAMETER_WRITERS.add(new WindowsExeParameterWriter());
@@ -103,7 +106,7 @@ public class ParameterService {
 	 * Reads the configuration file if allowed by the {@link com.rapidminer.operator.ExecutionMode}.
 	 */
 	public static void init() {
-		if (!intialized) {
+		if (!initialized) {
 			// then try to read configuration from file system if allowed to do so.
 			if (RapidMiner.getExecutionMode().canAccessFilesystem()) {
 				List<File> configFilesList = new LinkedList<>();
@@ -145,9 +148,10 @@ public class ParameterService {
 				LOGGER.config("Execution mode " + RapidMiner.getExecutionMode()
 						+ " does not permit file access. Ignoring all rcfiles.");
 			}
+			ENFORCED_PARAMETER.init();
 
 			// set flag to avoid second call
-			intialized = true;
+			initialized = true;
 		}
 	}
 
@@ -186,6 +190,12 @@ public class ParameterService {
 			}
 		}
 
+		// Check if the value is enforced
+		String adminValue = ENFORCED_PARAMETER.getProperty(key);
+		if (adminValue != null && !adminValue.equals(value)) {
+			return;
+		}
+
 		// setting parameter
 		Parameter parameter = PARAMETER_MAP.get(key);
 		if (parameter == null) {
@@ -194,12 +204,7 @@ public class ParameterService {
 		}
 		parameter.setValue(value);
 
-		try {
-			informListenerOfChange(key, value);
-		} catch (Throwable e) {
-			LogService.getRoot().log(Level.WARNING, I18N.getMessage(LogService.getRoot().getResourceBundle(),
-					"com.rapidminer.tools.ParameterService.listener_error", e));
-		}
+		informListenerOfChange(key, value);
 	}
 
 	/**
@@ -398,8 +403,14 @@ public class ParameterService {
 		Properties properties = new Properties();
 		for (Entry<String, Parameter> entry : PARAMETER_MAP.entrySet()) {
 			Parameter parameter = entry.getValue();
-			if (parameter.getValue() != null) {
-				properties.put(entry.getKey(), parameter.getValue());
+			String value = parameter.getValue();
+			String key = entry.getKey();
+			// don't store enforced parameters
+			if (isValueEnforced(key)) {
+				value = ENFORCED_PARAMETER.getOriginalValue(key);
+			}
+			if (value != null) {
+				properties.put(key, value);
 			}
 		}
 		BufferedOutputStream out = null;
@@ -432,27 +443,14 @@ public class ParameterService {
 	 * without loosing the data.
 	 */
 	public static void registerParameter(ParameterType type) {
-		Parameter parameter = PARAMETER_MAP.get(type.getKey());
-		if (parameter == null) {
-			parameter = new Parameter(type);
-			PARAMETER_MAP.put(type.getKey(), parameter);
-		} else {
-			parameter.setType(type);
-		}
+		registerParameter(type,null, new ParameterScope());
 	}
 
 	/**
 	 * This method allows to set the group explicitly rather than deriving it from the key.
 	 */
 	public static void registerParameter(ParameterType type, String group) {
-		Parameter parameter = PARAMETER_MAP.get(type.getKey());
-		if (parameter == null) {
-			parameter = new Parameter(type, group);
-			PARAMETER_MAP.put(type.getKey(), parameter);
-		} else {
-			parameter.setType(type);
-			parameter.setGroup(group);
-		}
+		registerParameter(type, group, new ParameterScope());
 	}
 
 	/**
@@ -461,26 +459,40 @@ public class ParameterService {
 	 * memory size...
 	 */
 	public static void registerParameter(ParameterType type, String group, ParameterScope scope) {
+		// if it is protected, don't allow an overwrite
+		if (RapidMiner.isParameterProtected(type.getKey())) {
+			return;
+		}
 		Parameter parameter = PARAMETER_MAP.get(type.getKey());
 		if (parameter == null) {
-			parameter = new Parameter(type, group);
+			parameter = group == null ? new Parameter(type) : new Parameter(type, group);
 			PARAMETER_MAP.put(type.getKey(), parameter);
 		} else {
 			parameter.setType(type);
-			parameter.setGroup(group);
+			if (group != null) {
+				parameter.setGroup(group);
+			}
 		}
 		parameter.setScope(scope);
 	}
 
 	private static void informListenerOfChange(String key, String value) {
 		for (ParameterChangeListener listener : PARAMETER_LISTENERS) {
-			listener.informParameterChanged(key, value);
+			try {
+				listener.informParameterChanged(key, value);
+			} catch (Throwable e) {
+				LogService.getRoot().log(Level.WARNING, "com.rapidminer.tools.ParameterService.listener_error", e);
+			}
 		}
 	}
 
 	private static void informListenerOfSave() {
 		for (ParameterChangeListener listener : PARAMETER_LISTENERS) {
-			listener.informParameterSaved();
+			try {
+				listener.informParameterSaved();
+			} catch (Throwable e) {
+				LogService.getRoot().log(Level.WARNING, "com.rapidminer.tools.ParameterService.listener_error", e);
+			}
 		}
 	}
 
@@ -505,7 +517,7 @@ public class ParameterService {
 
 	/**
 	 * This method is deprecated and shouldn't be used anymore. To save RapidMiner's Parameters, use
-	 * method {@link #saveProperties(File))}. To save the given properties you can simply call
+	 * method {@link #saveParameters(File))}. To save the given properties you can simply call
 	 * {@link Properties#store(java.io.OutputStream, String)} yourself.
 	 */
 	@Deprecated
@@ -648,4 +660,25 @@ public class ParameterService {
 		return deflt;
 	}
 
+	/**
+	 * Check if the value is enforced by the administrator
+	 *
+	 * @param key
+	 * 		the key to check
+	 * @return {@code true} if the value is enforced
+	 * @since 9.0.0
+	 */
+	public static boolean isValueEnforced(String key) {
+		return ENFORCED_PARAMETER.containsKey(key);
+	}
+
+	/**
+	 * Check if admin enforced settings exists
+	 *
+	 * @return {@code true} if values are enforced
+	 * @since 9.0.0
+	 */
+	public static boolean hasEnforcedValues() {
+		return !ENFORCED_PARAMETER.isEmpty();
+	}
 }

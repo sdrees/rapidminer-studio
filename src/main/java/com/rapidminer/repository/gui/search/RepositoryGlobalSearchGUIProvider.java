@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -36,11 +36,11 @@ import javax.swing.ImageIcon;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.SwingWorker;
 import javax.swing.border.Border;
 
 import org.apache.lucene.document.Document;
 
+import com.rapidminer.connection.util.ConnectionI18N;
 import com.rapidminer.gui.RapidMinerGUI;
 import com.rapidminer.gui.actions.OpenAction;
 import com.rapidminer.gui.dnd.TransferableRepositoryEntry;
@@ -48,18 +48,24 @@ import com.rapidminer.gui.renderer.RendererService;
 import com.rapidminer.gui.search.GlobalSearchGUIUtilities;
 import com.rapidminer.gui.search.GlobalSearchableGUIProvider;
 import com.rapidminer.gui.tools.IconSize;
+import com.rapidminer.gui.tools.MultiSwingWorker;
 import com.rapidminer.gui.tools.SwingTools;
 import com.rapidminer.operator.Model;
+import com.rapidminer.repository.ConnectionEntry;
+import com.rapidminer.repository.ConnectionRepository;
 import com.rapidminer.repository.Entry;
 import com.rapidminer.repository.IOObjectEntry;
 import com.rapidminer.repository.MalformedRepositoryLocationException;
 import com.rapidminer.repository.ProcessEntry;
+import com.rapidminer.repository.Repository;
+import com.rapidminer.repository.RepositoryException;
 import com.rapidminer.repository.RepositoryLocation;
 import com.rapidminer.repository.gui.RepositoryTree;
 import com.rapidminer.repository.search.RepositoryGlobalSearch;
 import com.rapidminer.search.GlobalSearchUtilities;
 import com.rapidminer.tools.I18N;
 import com.rapidminer.tools.LogService;
+import com.rapidminer.tools.usagestats.DefaultUsageLoggable;
 
 
 /**
@@ -73,7 +79,7 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 	/**
 	 * Drag & Drop support for repository entries.
 	 */
-	private static final class RepositoryDragGesture implements DragGestureListener {
+	private static final class RepositoryDragGesture extends DefaultUsageLoggable implements DragGestureListener {
 
 		private final RepositoryLocation location;
 
@@ -95,8 +101,15 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 			}
 
 			// set the repository entry as the Transferable
-			event.startDrag(cursor, new TransferableRepositoryEntry(location));
+			TransferableRepositoryEntry transferable = new TransferableRepositoryEntry(location);
+			if (usageLogger != null) {
+				transferable.setUsageStatsLogger(usageLogger);
+			} else if (usageObject != null) {
+				transferable.setUsageObject(usageObject);
+			}
+			event.startDrag(cursor, transferable);
 		}
+
 	}
 
 	private static final ImageIcon PROCESS_ICON = SwingTools.createIcon("16/gearwheel.png");
@@ -198,7 +211,16 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 
 		try {
 			RepositoryLocation location = new RepositoryLocation(absoluteLocation);
-
+			try {
+				Repository repository = location.getRepository();
+				if (repository instanceof ConnectionRepository && !((ConnectionRepository) repository).isConnected()) {
+					// skip scrolling if the repository was disconnected
+					return;
+				}
+			} catch (RepositoryException e) {
+				// repo not available, no scrolling necessary
+				return;
+			}
 			// scroll to location
 			// twice because otherwise the repository browser selects the parent...
 			RapidMinerGUI.getMainFrame().getRepositoryBrowser().getRepositoryTree().expandAndSelectIfExists(location);
@@ -237,7 +259,7 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 	 * 		the type icon label
 	 */
 	private void loadEntryDetailsAsync(final Document document, final JLabel iconListLabel) {
-		SwingWorker<Entry, Void> worker = new SwingWorker<Entry, Void>() {
+		MultiSwingWorker<Entry, Void> worker = new MultiSwingWorker<Entry, Void>() {
 
 			@Override
 			protected Entry doInBackground() throws Exception {
@@ -249,10 +271,16 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 			protected void done() {
 				try {
 					Entry locatedEntry = get();
+					// GlobalSearch uses a different API than the actual repository for some repositories (e.g. RM ServeR)
+					// so we can have a hit in the GlobalSearch but the repository does not yet know about it.
+					if (locatedEntry == null) {
+						iconListLabel.setIcon(UNKNOWN_ICON);
+						return;
+					}
 					// no error here? Entry located successfully.
 
 					// put icon in cache for faster retrieval next time
-					Icon icon = getIconForEntry(locatedEntry);
+					Icon icon = getIconForEntry(locatedEntry, document);
 					ICON_CACHE.put(locatedEntry.getLocation().getAbsoluteLocation(), icon);
 
 					iconListLabel.setIcon(icon);
@@ -264,7 +292,7 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 				}
 			}
 		};
-		worker.execute();
+		worker.start();
 	}
 
 	/**
@@ -274,7 +302,7 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 	 * 		the document for which to load the repository entry
 	 */
 	private void openEntryAsync(final Document document) {
-		SwingWorker<Entry, Void> worker = new SwingWorker<Entry, Void>() {
+		MultiSwingWorker<Entry, Void> worker = new MultiSwingWorker<Entry, Void>() {
 
 			@Override
 			protected Entry doInBackground() throws Exception {
@@ -290,6 +318,8 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 
 					if (locatedEntry instanceof ProcessEntry) {
 						RepositoryTree.openProcess((ProcessEntry) locatedEntry);
+					} else if (locatedEntry instanceof ConnectionEntry) {
+						OpenAction.showConnectionInformationDialog((ConnectionEntry) locatedEntry);
 					} else if (locatedEntry instanceof IOObjectEntry) {
 						OpenAction.showAsResult((IOObjectEntry) locatedEntry);
 					} else {
@@ -302,7 +332,7 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 				}
 			}
 		};
-		worker.execute();
+		worker.start();
 	}
 
 	/**
@@ -327,13 +357,19 @@ public class RepositoryGlobalSearchGUIProvider implements GlobalSearchableGUIPro
 	 *
 	 * @param entry
 	 * 		the entry, must not be {@code null}
+	 * @param document
+	 * 		the document, must not be {@code null}
 	 * @return the icon, never {@code null}
 	 */
-	private static Icon getIconForEntry(final Entry entry) {
+	private static Icon getIconForEntry(final Entry entry, final Document document) {
 		if (entry instanceof ProcessEntry) {
 			return PROCESS_ICON;
 		} else if (entry instanceof Model) {
 			return MODEL_ICON;
+		} else if (entry instanceof ConnectionEntry) {
+			String connectionType = document.get(RepositoryGlobalSearch.FIELD_CONNECTION_TYPE);
+			// server connections do not have the type known unless detailed indexing is enabled, so make sure we show the generic connection icon and not crash
+			return ConnectionI18N.getConnectionIcon(connectionType != null ? connectionType : "", IconSize.SMALL);
 		} else if (entry instanceof IOObjectEntry) {
 			IOObjectEntry dataEntry = (IOObjectEntry) entry;
 			return RendererService.getIcon(dataEntry.getObjectClass(), IconSize.SMALL);

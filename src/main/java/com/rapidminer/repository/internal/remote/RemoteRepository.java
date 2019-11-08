@@ -1,21 +1,21 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
- * 
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
+ *
  * Complete list of developers available at our web site:
- * 
+ *
  * http://rapidminer.com
- * 
+ *
  * This program is free software: you can redistribute it and/or modify it under the terms of the
  * GNU Affero General Public License as published by the Free Software Foundation, either version 3
  * of the License, or (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
  * even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * Affero General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Affero General Public License along with this program.
  * If not, see http://www.gnu.org/licenses/.
-*/
+ */
 package com.rapidminer.repository.internal.remote;
 
 import java.io.IOException;
@@ -23,16 +23,17 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.List;
 
+import com.rapidminer.gui.tools.VersionNumber;
 import com.rapidminer.repository.ConnectionRepository;
 import com.rapidminer.repository.RepositoryException;
 import com.rapidminer.tools.PasswordInputCanceledException;
+import com.rapidminer.tools.usagestats.ActionStatisticsCollector;
 
 
 /**
- * Interface for a RapidMiner server backed repository. It allows to manupilate the repository
- * content via the {@link RemoteContentManager}, to schedule remote processes via the
- * {@link RemoteScheduler} and to retrieve further server information via the
- * {@link RemoteInfoService}.
+ * Interface for a RapidMiner server backed repository. It allows to manipulate the repository content via the
+ * {@link RemoteContentManager}, to schedule remote processes via the {@link RemoteScheduler} and to retrieve further
+ * server information via the {@link RemoteInfoService}.
  *
  * @author Nils Woehler
  * @since 6.5.0
@@ -40,11 +41,28 @@ import com.rapidminer.tools.PasswordInputCanceledException;
  */
 public interface RemoteRepository extends RemoteFolder, ConnectionRepository {
 
-	public static final String TAG_REMOTE_REPOSITORY = "remoteRepository";
+	String TAG_REMOTE_REPOSITORY = "remoteRepository";
 
 	/** Type of object requested from a server. */
-	public static enum EntryStreamType {
-		METADATA, IOOBJECT, PROCESS, BLOB
+	enum EntryStreamType {
+		METADATA, IOOBJECT, PROCESS, BLOB, CONNECTION_INFORMATION, CONNECTION_METADATA
+	}
+
+	/** Authentication types */
+	enum AuthenticationType {
+
+		BASIC(ActionStatisticsCollector.TYPE_REMOTE_REPOSITORY), // user+password
+		SAML(ActionStatisticsCollector.TYPE_REMOTE_REPOSITORY_SAML); // enterprise SSO
+
+		private final String actionStatisticsType; // for usage stat collection
+
+		private AuthenticationType(String actionStatisticsType) {
+			this.actionStatisticsType = actionStatisticsType;
+		}
+
+		public String getActionStatisticsType() {
+			return actionStatisticsType;
+		}
 	}
 
 	/**
@@ -131,6 +149,7 @@ public interface RemoteRepository extends RemoteFolder, ConnectionRepository {
 	 *             if the connection failed
 	 * @throws PasswordInputCanceledException
 	 *             if the login dialog was canceled
+	 * @deprecated @since 9.5.0 use getClient().getContentManager() instead
 	 */
 	RemoteContentManager getContentManager() throws RepositoryException, PasswordInputCanceledException;
 
@@ -155,7 +174,9 @@ public interface RemoteRepository extends RemoteFolder, ConnectionRepository {
 	 * @return the connection
 	 * @throws IOException
 	 * @throws RepositoryException
+	 * @deprecated @since 9.5.0 implement necessary access in the {@link BaseServerClient} impl VersionedServerClient
 	 */
+	@Deprecated
 	HttpURLConnection getHTTPConnection(String pathInfo, boolean preAuthHeader) throws IOException, RepositoryException;
 
 	/**
@@ -177,9 +198,11 @@ public interface RemoteRepository extends RemoteFolder, ConnectionRepository {
 	 * @throws RepositoryException
 	 *             if preAuthHeader is {@code false} and checking if the server is reachable failed
 	 *             or if the login dialog was canceled during this check
+	 * @deprecated @since 9.5.0 implement necessary access in the {@link BaseServerClient} impl VersionedServerClient
 	 */
+	@Deprecated
 	HttpURLConnection getHTTPConnection(String pathInfo, String query, boolean preAuthHeader)
-	        throws IOException, RepositoryException;
+			throws IOException, RepositoryException;
 
 	/**
 	 * @return the allowed connection typeIds of this remote repository
@@ -217,6 +240,75 @@ public interface RemoteRepository extends RemoteFolder, ConnectionRepository {
 	 * @throws IOException if a connection error occurs
 	 * @throws RepositoryException if a repository error occurs
 	 */
-	default boolean isFileExtensionBlacklisted(String originalFilename) throws IOException, RepositoryException {return false;}
+	default boolean isFileExtensionBlacklisted(String originalFilename) throws IOException, RepositoryException {
+		return false;
+	}
 
+	/**
+	 * Return authentication type
+	 *
+	 * @return
+	 */
+	AuthenticationType getAuthenticationType();
+
+	/**
+	 * Sets the authentication type to {@link AuthenticationType#BASIC} or
+	 * {@link AuthenticationType#SAML}
+	 *
+	 * @param authenticationType
+	 *
+	 */
+	void setAuthenticationType(AuthenticationType authenticationType);
+
+
+	/**
+	 * Load Vault information for a {@link com.rapidminer.connection.ConnectionInformation} in the repositoryLocation
+	 *
+	 * @param repositoryLocation
+	 * 		location of the {@link com.rapidminer.connection.ConnectionInformation}
+	 * @return the information available in the vault for injection
+	 */
+	RemoteVaultEntry[] loadVaultInfo(String repositoryLocation) throws RepositoryException;
+
+	/**
+	 * Create a new entry in the vault to add some information to a {@link com.rapidminer.connection.ConnectionInformation}
+	 * object that is already stored in the repository
+	 *
+	 * @param path
+	 * 		location of the connection information in the repository
+	 * @param entries
+	 * 		to be set created data entries containing group and name for injection reference and the value to be injected
+	 */
+	void createVaultEntry(String path, List<RemoteCreateVaultInformation> entries) throws IOException, RepositoryException;
+
+	/**
+	 * Cleans up this repository, used in between process executions Does nothing by default.
+	 *
+	 * @since 9.5
+	 */
+	default void cleanup(){}
+
+	/*
+	 * Get a client that is compatible with the Server
+	 *
+	 * @return an implementation based on {@link BaseServerClient}, methods may return
+	 * {@link com.rapidminer.repository.internal.remote.exception.NotYetSupportedServiceException}
+	 * or {@link com.rapidminer.repository.internal.remote.exception.DeprecatedServiceException}
+	 * to be able to use this information to display it to the user or react on it.
+	 */
+	BaseServerClient getClient();
+
+	/**
+	 * Get the version from Server.
+	 *
+	 * @return the servers {@link VersionNumber} or null
+	 */
+	VersionNumber getServerVersion();
+
+	/**
+	 * Get the version from Server if it is already known, should not connect to get the version number.
+	 *
+	 * @return the servers {@link VersionNumber} or null
+	 */
+	VersionNumber getKnownServerVersion();
 }

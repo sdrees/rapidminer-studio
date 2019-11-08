@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -18,6 +18,12 @@
 */
 package com.rapidminer.operator.performance.cost;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang.ArrayUtils;
+
 import com.rapidminer.example.Attribute;
 import com.rapidminer.example.Attributes;
 import com.rapidminer.example.Example;
@@ -26,9 +32,9 @@ import com.rapidminer.example.Tools;
 import com.rapidminer.operator.Operator;
 import com.rapidminer.operator.OperatorDescription;
 import com.rapidminer.operator.OperatorException;
+import com.rapidminer.operator.OperatorVersion;
 import com.rapidminer.operator.UserError;
 import com.rapidminer.operator.ValueDouble;
-import com.rapidminer.operator.performance.MeasuredPerformance;
 import com.rapidminer.operator.performance.PerformanceVector;
 import com.rapidminer.operator.ports.InputPort;
 import com.rapidminer.operator.ports.OutputPort;
@@ -39,10 +45,6 @@ import com.rapidminer.parameter.ParameterTypeEnumeration;
 import com.rapidminer.parameter.ParameterTypeMatrix;
 import com.rapidminer.parameter.ParameterTypeString;
 import com.rapidminer.tools.Ontology;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 
 /**
@@ -58,6 +60,9 @@ public class CostEvaluator extends Operator {
 	private static final String PARAMETER_KEEP_EXAMPLE_SET = "keep_exampleSet";
 	private static final String PARAMETER_CLASS_NAME = "class_name";
 	private static final String PARAMETER_CLASS_DEFINITION = "class_order_definition";
+
+	/** Up to and including version 9.0.2 the wrong fitness was returned by the ClassificationCostCriterion */
+	static final OperatorVersion WRONG_FITNESS = new OperatorVersion(9, 0, 2);
 
 	private InputPort exampleSetInput = getInputPorts().createPort("example set");
 
@@ -103,7 +108,7 @@ public class CostEvaluator extends Operator {
 					.transformString2Enumeration(getParameterAsString(PARAMETER_CLASS_DEFINITION));
 
 			if (enumeratedValues.length > 0) {
-				classOrderMap = new HashMap<String, Integer>();
+				classOrderMap = new HashMap<>();
 				int i = 0;
 
 				for (String className : enumeratedValues) {
@@ -126,7 +131,8 @@ public class CostEvaluator extends Operator {
 			}
 		}
 
-		MeasuredPerformance criterion = new ClassificationCostCriterion(costMatrix, classOrderMap, label, predictedLabel);
+		ClassificationCostCriterion criterion = new ClassificationCostCriterion(costMatrix, classOrderMap, label, predictedLabel);
+		criterion.setVersion(getCompatibilityLevel());
 		PerformanceVector performance = new PerformanceVector();
 		performance.addCriterion(criterion);
 		// now measuring costs
@@ -149,13 +155,21 @@ public class CostEvaluator extends Operator {
 				"Indicates if the example set should be kept.", false);
 		type.setHidden(true);
 		types.add(type);
-		types.add(new ParameterTypeMatrix(PARAMETER_COST_MATRIX,
+		type = new ParameterTypeMatrix(PARAMETER_COST_MATRIX,
 				"The matrix of missclassification costs. Columns and Rows in order of internal mapping.", "Cost Matrix",
-				"Predicted Class", "True Class", true, false));
+				"Predicted Class", "True Class", true, false);
+		type.setPrimary(true);
+		types.add(type);
 		types.add(new ParameterTypeEnumeration(
 				PARAMETER_CLASS_DEFINITION,
 				"With this parameter it is possible to define the order of classes used in the cost matrix. First class in this list is First class in the matrix.",
 				new ParameterTypeString(PARAMETER_CLASS_NAME, "The name of the class."), false));
 		return types;
+	}
+
+	@Override
+	public OperatorVersion[] getIncompatibleVersionChanges() {
+		return (OperatorVersion[]) ArrayUtils.addAll(super.getIncompatibleVersionChanges(),
+				new OperatorVersion[]{WRONG_FITNESS});
 	}
 }

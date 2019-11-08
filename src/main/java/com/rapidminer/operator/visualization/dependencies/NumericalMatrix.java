@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -18,7 +18,9 @@
 */
 package com.rapidminer.operator.visualization.dependencies;
 
-import Jama.Matrix;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+
 import com.rapidminer.datatable.DataTable;
 import com.rapidminer.datatable.DataTablePairwiseMatrixExtractionAdapter;
 import com.rapidminer.datatable.DataTableSymmetricalMatrixAdapter;
@@ -27,8 +29,7 @@ import com.rapidminer.example.ExampleSet;
 import com.rapidminer.operator.ResultObjectAdapter;
 import com.rapidminer.tools.Tools;
 
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
+import Jama.Matrix;
 
 
 /**
@@ -53,11 +54,16 @@ public class NumericalMatrix extends ResultObjectAdapter {
 
 	private String name;
 
+	private double theoreticalMin = Double.NaN;
+	private double theoreticalMax = Double.NaN;
+
 	private boolean symmetrical = false;
 
 	private String firstAttributeName = "First Attribute";
 
 	private String secondAttributeName = "Second Attribute";
+
+	private boolean isUseless;
 
 	public NumericalMatrix(String name, String[] columnNames, boolean symmetrical) {
 		this(name, columnNames, new Matrix(columnNames.length, columnNames.length), symmetrical);
@@ -147,6 +153,66 @@ public class NumericalMatrix extends ResultObjectAdapter {
 		return name + " Matrix";
 	}
 
+	/**
+	 * @return whether the "useless" flag was set
+	 * @since 8.2
+	 */
+	public boolean isUseless() {
+		return isUseless;
+	}
+
+	/**
+	 * Sets the "useless" flag for this matrix.
+	 *
+	 * @since 8.2
+	 */
+	public void setUseless(boolean useless) {
+		isUseless = useless;
+	}
+
+	/**
+	 * Sets the theoretical min value that can appear in this matrix (e.g. -1 for correlation matrix).
+	 *
+	 * @param min
+	 * 		the min value or {@link Double#NaN}
+	 * @since 9.2.1
+	 */
+	public void setTheoreticalMin(double min) {
+		this.theoreticalMin = min;
+	}
+
+	/**
+	 * Gets the theoretical min value that can appear in this matrix (e.g. -1 for correlation matrix).
+	 *
+	 * @return the min value or {@link Double#NaN} if not set
+	 * @since 9.2.1
+	 */
+	public double getTheoreticalMin() {
+		return theoreticalMin;
+	}
+
+	/**
+	 * Sets the theoretical max value that can appear in this matrix (e.g. 1 for correlation matrix).
+	 *
+	 * @param max
+	 * 		the max value or {@link Double#NaN}
+	 * @since 9.2.1
+	 */
+	public void setTheoreticalMax(double max) {
+		this.theoreticalMax = max;
+	}
+
+	/**
+	 * Gets the theoretical max value that can appear in this matrix (e.g. 1 for correlation matrix).
+	 *
+	 * @return the max value or {@link Double#NaN} if not set
+	 * @since 9.2.1
+	 */
+	public double getTheoreticalMax() {
+		return theoreticalMax;
+	}
+
+
 	public DataTable createMatrixDataTable() {
 		return new DataTableSymmetricalMatrixAdapter(this, this.name, this.columnNames);
 	}
@@ -179,7 +245,7 @@ public class NumericalMatrix extends ResultObjectAdapter {
 
 	@Override
 	public String toString() {
-		StringBuffer result = new StringBuffer(name + " Matrix (" + matrix.getRowDimension() + " rows, "
+		StringBuilder result = new StringBuilder(name + " Matrix (" + matrix.getRowDimension() + " rows, "
 				+ matrix.getColumnDimension() + " columns):" + Tools.getLineSeparator());
 		for (int i = 0; i < columnNames.length; i++) {
 			if (i < MAX_NUMBER_OF_RESULT_STRING_ATTRIBUTES) {
@@ -208,4 +274,5 @@ public class NumericalMatrix extends ResultObjectAdapter {
 		}
 		return result.toString();
 	}
+
 }

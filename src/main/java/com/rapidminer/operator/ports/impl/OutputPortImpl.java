@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -21,6 +21,7 @@ package com.rapidminer.operator.ports.impl;
 import com.rapidminer.Process;
 import com.rapidminer.operator.DebugMode;
 import com.rapidminer.operator.IOObject;
+import com.rapidminer.operator.ports.DeliveringPortManager;
 import com.rapidminer.operator.ports.OutputPorts;
 import com.rapidminer.operator.ports.Port;
 import com.rapidminer.operator.ports.Ports;
@@ -33,17 +34,18 @@ import com.rapidminer.operator.ports.metadata.MetaData;
 
 public class OutputPortImpl extends AbstractOutputPort {
 
-	/** Use the factory method {@link OutputPorts#createPort()} to create OutputPorts. */
+	/** Use the factory method {@link OutputPorts#createPort(String)} to create OutputPorts. */
 	protected OutputPortImpl(Ports<? extends Port> owner, String name, boolean simulatesStack) {
 		super(owner, name, simulatesStack);
 	}
 
 	@Override
 	public void deliver(IOObject object) {
+
 		// registering history of object
 		if (object != null) {
 			object.appendOperatorToHistory(getPorts().getOwner().getOperator(), this);
-
+			DeliveringPortManager.setLastDeliveringPort(object, this);
 			// set source if not yet set
 			if (object.getSource() == null) {
 				if (getPorts().getOwner().getOperator() != null) {

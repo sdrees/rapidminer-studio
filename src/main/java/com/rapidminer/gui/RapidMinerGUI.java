@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -22,7 +22,9 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Frame;
+import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsEnvironment;
+import java.awt.Insets;
 import java.awt.Toolkit;
 import java.io.BufferedReader;
 import java.io.File;
@@ -34,8 +36,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.security.Policy;
 import java.util.Arrays;
@@ -45,12 +45,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.logging.Level;
+import javax.swing.JFrame;
+import javax.swing.JPopupMenu;
+import javax.swing.PopupFactory;
 import javax.swing.SwingUtilities;
 import javax.swing.ToolTipManager;
 import javax.swing.UIManager;
 
 import com.rapidminer.FileProcessLocation;
-import com.rapidminer.NoOpUserError;
 import com.rapidminer.Process;
 import com.rapidminer.ProcessLocation;
 import com.rapidminer.RapidMiner;
@@ -64,15 +66,18 @@ import com.rapidminer.gui.dialog.EULADialog;
 import com.rapidminer.gui.docking.RapidDockableContainerFactory;
 import com.rapidminer.gui.internal.GUIStartupListener;
 import com.rapidminer.gui.license.LicenseTools;
+import com.rapidminer.gui.look.HeavyweightOSXPopupFactory;
 import com.rapidminer.gui.look.RapidLookAndFeel;
 import com.rapidminer.gui.look.fc.BookmarkIO;
 import com.rapidminer.gui.look.ui.RapidDockingUISettings;
+import com.rapidminer.gui.osx.OSXAdapter;
 import com.rapidminer.gui.plotter.PlotterPanel;
 import com.rapidminer.gui.processeditor.search.OperatorGlobalSearch;
 import com.rapidminer.gui.processeditor.search.OperatorGlobalSearchGUIProvider;
 import com.rapidminer.gui.safemode.SafeMode;
 import com.rapidminer.gui.search.GlobalSearchGUIRegistry;
 import com.rapidminer.gui.search.GlobalSearchPanel;
+import com.rapidminer.gui.security.BlacklistedOperatorProcessEditor;
 import com.rapidminer.gui.tools.SwingTools;
 import com.rapidminer.gui.tools.dialogs.DecisionRememberingConfirmDialog;
 import com.rapidminer.gui.tools.logging.LogHandlerModel;
@@ -84,6 +89,7 @@ import com.rapidminer.license.LicenseManagerRegistry;
 import com.rapidminer.parameter.ParameterTypeBoolean;
 import com.rapidminer.parameter.ParameterTypeCategory;
 import com.rapidminer.parameter.ParameterTypeColor;
+import com.rapidminer.parameter.ParameterTypeDouble;
 import com.rapidminer.parameter.ParameterTypeInt;
 import com.rapidminer.repository.MalformedRepositoryLocationException;
 import com.rapidminer.repository.RepositoryLocation;
@@ -105,12 +111,13 @@ import com.rapidminer.tools.LaunchListener;
 import com.rapidminer.tools.LaunchListener.RemoteControlHandler;
 import com.rapidminer.tools.LogService;
 import com.rapidminer.tools.ParameterService;
+import com.rapidminer.tools.PlatformUtilities;
+import com.rapidminer.tools.RMUrlHandler;
 import com.rapidminer.tools.SystemInfoUtilities;
 import com.rapidminer.tools.SystemInfoUtilities.OperatingSystem;
 import com.rapidminer.tools.Tools;
 import com.rapidminer.tools.plugin.Plugin;
-import com.rapidminer.tools.update.internal.UpdateManagerRegistry;
-import com.rapidminer.tools.usagestats.CallToActionScheduler;
+import com.rapidminer.tools.usagestats.CtaEventAggregator;
 import com.rapidminer.tools.usagestats.UsageStatistics;
 import com.rapidminer.tools.usagestats.UsageStatsScheduler;
 import com.rapidminer.tools.usagestats.UsageStatsTransmissionDialog;
@@ -132,7 +139,7 @@ public class RapidMinerGUI extends RapidMiner {
 	public static final String PROPERTY_GEOMETRY_WIDTH = "rapidminer.gui.geometry.width";
 	public static final String PROPERTY_GEOMETRY_HEIGHT = "rapidminer.gui.geometry.height";
 	public static final String PROPERTY_GEOMETRY_DIVIDER_MAIN = "rapidminer.gui.geometry.divider.main";
-	public static final String PROPERTY_GEOMETRY_DIVIDER_EDITOR = "rapidminer.gui.geometry.divider.editor";;
+	public static final String PROPERTY_GEOMETRY_DIVIDER_EDITOR = "rapidminer.gui.geometry.divider.editor";
 	public static final String PROPERTY_GEOMETRY_DIVIDER_LOGGING = "rapidminer.gui.geometry.divider.logging";
 	public static final String PROPERTY_GEOMETRY_DIVIDER_GROUPSELECTION = "rapidminer.gui.geometry.divider.groupselection";
 	public static final String PROPERTY_EXPERT_MODE = "rapidminer.gui.expertmode";
@@ -144,6 +151,13 @@ public class RapidMinerGUI extends RapidMiner {
 	public static final String PROPERTY_RAPIDMINER_GUI_MAX_SORTABLE_ROWS = "rapidminer.gui.max_sortable_rows";
 	public static final String PROPERTY_RAPIDMINER_GUI_MAX_DISPLAYED_VALUES = "rapidminer.gui.max_displayed_values";
 	public static final String PROPERTY_RAPIDMINER_GUI_SNAP_TO_GRID = "rapidminer.gui.snap_to_grid";
+
+	/**
+	 * Instead of possibly overlapping operators the connected operators to the right should be moved when moving an operator.
+	 * @since 9.2
+ 	 */
+	public static final String PROPERTY_RAPIDMINER_GUI_MOVE_CONNECTED_OPERATORS = "rapidminer.gui.move_connected_operators";
+
 	/**
 	 * The property name for &quot;Maximum number of states in the undo list.&quot;
 	 *
@@ -160,7 +174,6 @@ public class RapidMinerGUI extends RapidMiner {
 	public static final String PROPERTY_OPEN_IN_FILEBROWSER = "rapidminer.gui.entry_open_in_filebrowser";
 	public static final String PROPERTY_CLOSE_ALL_RESULTS_NOW = "rapidminer.gui.close_all_results_without_confirmation";
 	public static final String PROPERTY_FETCH_DATA_BASE_TABLES_NAMES = "rapidminer.gui.fetch_data_base_table_names";
-	public static final String PROPERTY_DISCONNECT_ON_DISABLE = "rapidminer.gui.disconnect_on_disable";
 	/** determines if a warning notification bubble is shown when no result ports are connected */
 	public static final String PROPERTY_SHOW_NO_RESULT_WARNING = "rapidminer.gui.no_result_port_connected";
 	public static final String PROPERTY_FONT_CONFIG = "rapidminer.gui.font_config";
@@ -180,6 +193,19 @@ public class RapidMinerGUI extends RapidMiner {
 	public static final String PROPERTY_RAPIDMINER_GUI_PURCHASED_NOT_INSTALLED_CHECK = "rapidminer.update.purchased.not_installed.check";
 	public static final String PROPERTY_RAPIDMINER_GUI_UPDATE_CHECK = "rapidminer.update.check";
 
+	// Admin Settings
+	public static final String PROPERTY_RAPIDMINER_DISALLOW_REMEMBER_PASSWORD = "rapidminer.disallow.remember.password";
+	public static final String PROPERTY_RAPIDMINER_DISALLOW_STUDIO_UPDATE = "rapidminer.disallow.studio.update";
+
+	// different behavior for disconnecting deleted and disabled operators
+	public static final String PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR = "rapidminer.gui.disable_op_conn_behavior";
+	public static final String[] PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR_VALUES = { "removed", "bridged", "kept" };
+	public static final String PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR = "rapidminer.gui.delete_op_conn_behavior";
+	public static final String[] PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR_VALUES = { "removed", "bridged" };
+	public static final int PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR_DEFAULT_VALUE = 1;
+	public static final int PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR_DEFAULT_VALUE = 1;
+
+
 	static {
 
 		// GUI Parameters
@@ -191,6 +217,7 @@ public class RapidMinerGUI extends RapidMiner {
 		RapidMiner.registerParameter(new ParameterTypeInt(PROPERTY_RAPIDMINER_GUI_MAX_DISPLAYED_VALUES, "", 1,
 				Integer.MAX_VALUE, MetaDataViewerTableModel.DEFAULT_MAX_DISPLAYED_VALUES));
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_RAPIDMINER_GUI_SNAP_TO_GRID, "", true));
+		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_RAPIDMINER_GUI_MOVE_CONNECTED_OPERATORS, "", true));
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_AUTOWIRE_INPUT, "", false));
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_AUTOWIRE_OUTPUT, "", false));
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_RESOLVE_RELATIVE_REPOSITORY_LOCATIONS, "", true));
@@ -203,7 +230,10 @@ public class RapidMinerGUI extends RapidMiner {
 		RapidMiner.registerParameter(new ParameterTypeCategory(PROPERTY_CLOSE_ALL_RESULTS_NOW, "",
 				DecisionRememberingConfirmDialog.PROPERTY_VALUES, DecisionRememberingConfirmDialog.ASK));
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_FETCH_DATA_BASE_TABLES_NAMES, "", true));
-		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_DISCONNECT_ON_DISABLE, "", true));
+
+		RapidMiner.registerParameter(new ParameterTypeCategory(PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR, "", PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR_VALUES, PROPERTY_DISABLE_OPERATOR_CONNECTION_BEHAVIOR_DEFAULT_VALUE));
+		RapidMiner.registerParameter(new ParameterTypeCategory(PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR, "", PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR_VALUES, PROPERTY_DELETE_OPERATOR_CONNECTION_BEHAVIOR_DEFAULT_VALUE));
+
 		RapidMiner.registerParameter(new ParameterTypeBoolean(PROPERTY_SHOW_NO_RESULT_WARNING, "", true));
 		RapidMiner.registerParameter(new ParameterTypeCategory(RapidMinerGUI.PROPERTY_FONT_CONFIG, "",
 				FontTools.getAvailableFonts(), FontTools.OPTION_INDEX_STANDARD_FONTS));
@@ -214,6 +244,9 @@ public class RapidMinerGUI extends RapidMiner {
 
 		// GUI Parameters MainFrame
 
+		RapidMiner.registerParameter(new ParameterTypeDouble(MainFrame.PROPERTY_RAPIDMINER_GUI_VISUALIZATIONS_MAX_ROWS_MODIFIER, "", 0.1, 10.0, 1.0));
+		RapidMiner.registerParameter(new ParameterTypeBoolean(MainFrame.PROPERTY_RAPIDMINER_GUI_PLOTTER_SHOW_LEGACY_SIMPLE_CHARTS, "", false));
+		RapidMiner.registerParameter(new ParameterTypeBoolean(MainFrame.PROPERTY_RAPIDMINER_GUI_PLOTTER_SHOW_LEGACY_ADVANCED_CHARTS, "", false));
 		RapidMiner.registerParameter(new ParameterTypeInt(MainFrame.PROPERTY_RAPIDMINER_GUI_PLOTTER_MATRIXPLOT_SIZE, "", 1,
 				Integer.MAX_VALUE, 200));
 		RapidMiner.registerParameter(new ParameterTypeInt(MainFrame.PROPERTY_RAPIDMINER_GUI_PLOTTER_ROWS_MAXIMUM, "", 1,
@@ -267,7 +300,7 @@ public class RapidMinerGUI extends RapidMiner {
 		// ----------------------------------------------------------
 	}
 
-	private static final int NUMBER_OF_RECENT_FILES = 8;
+	private static final int NUMBER_OF_RECENT_FILES = 10;
 
 	private static MainFrame mainFrame;
 
@@ -296,11 +329,9 @@ public class RapidMinerGUI extends RapidMiner {
 				LogService.getRoot().log(Level.INFO, "com.rapidminer.gui.RapidMinerGUI.running_shutdown_sequence");
 				RapidMinerGUI.getMainFrame().getPerspectiveController().shutdown();
 				RapidMinerGUI.saveRecentFileList();
-				RapidMinerGUI.saveGUIProperties();
 				UsageStatistics.getInstance().save();
 				RepositoryManager.shutdown();
 				UsageStatsScheduler.transmitOnShutdown();
-				CallToActionScheduler.INSTANCE.shutdown();
 			}
 		}
 	}
@@ -320,6 +351,8 @@ public class RapidMinerGUI extends RapidMiner {
 		// Initialize Docking UI -- important must be done as early as possible!
 		DockingUISettings.setInstance(new RapidDockingUISettings());
 		DockableContainerFactory.setFactory(new RapidDockableContainerFactory());
+
+		LogService.getRoot().log(Level.INFO, "com.rapidminer.gui.RapidMinerGUI.start_version", new Object[] {RapidMiner.getLongVersion(), PlatformUtilities.getReleasePlatform()} );
 
 		// inform listeners that splash is about to be shown
 		for (GUIStartupListener sl : startupListener) {
@@ -347,7 +380,6 @@ public class RapidMinerGUI extends RapidMiner {
 		// with the default product and constraints
 		RapidMiner.init();
 
-
 		// store (possibly new) active license (necessary, since no
 		// ACTIVE_LICENSE_CHANGED event is fired on startup)
 		LicenseManagerRegistry.INSTANCE.get().getAllActiveLicenses().forEach((l) -> {
@@ -370,19 +402,11 @@ public class RapidMinerGUI extends RapidMiner {
 
 		RapidMiner.splashMessage("workspace");
 
-
 		// check whether current EULA has been accepted
 		if (!EULADialog.getEULAAccepted()) {
 			// show EULA dialog
 			RapidMiner.splashMessage("eula");
-			SwingTools.invokeAndWait(new Runnable() {
-
-				@Override
-				public void run() {
-					EULADialog dialog = new EULADialog();
-					dialog.setVisible(true);
-				}
-			});
+			SwingTools.invokeAndWait(() -> new EULADialog().setVisible(true));
 		}
 
 		RapidMiner.splashMessage("history");
@@ -392,13 +416,7 @@ public class RapidMinerGUI extends RapidMiner {
 
 		RapidMiner.splashMessage("create_frame");
 
-		SwingUtilities.invokeAndWait(new Runnable() {
-
-			@Override
-			public void run() {
-				setMainFrame(new MainFrame());
-			}
-		});
+		SwingUtilities.invokeAndWait(() -> setMainFrame(new MainFrame()));
 		RapidMiner.splashMessage("gui_properties");
 		loadGUIProperties(mainFrame);
 		
@@ -407,6 +425,8 @@ public class RapidMinerGUI extends RapidMiner {
 
 		RapidMiner.splashMessage("plugin_gui");
 		Plugin.initPluginGuis(mainFrame);
+		// reload the sample repository to include plugin resources
+		RepositoryManager.refreshSampleRepository();
 
 		// only load the perspective here after all plugins have registered their dockables
 		// otherwise you may end up breaking the perspective and VLDocking exists in invalid states
@@ -423,14 +443,9 @@ public class RapidMinerGUI extends RapidMiner {
 				LogService.getRoot().log(Level.WARNING, "com.rapidminer.gui.RapidMinerGUI.startup_listener_error", e);
 			}
 		}
+		mainFrame.addExtendedProcessEditor(new BlacklistedOperatorProcessEditor());
 
-		SwingUtilities.invokeAndWait(new Runnable() {
-
-			@Override
-			public void run() {
-				getMainFrame().finishInitialization();
-			}
-		});
+		SwingUtilities.invokeAndWait(mainFrame::finishInitialization);
 
 		RapidMiner.splashMessage("show_frame");
 
@@ -504,29 +519,30 @@ public class RapidMinerGUI extends RapidMiner {
 		DataSourceFactoryRegistry.INSTANCE.register(new ExcelDataSourceFactory());
 		DataSourceFactoryRegistry.INSTANCE.register(new CSVDataSourceFactory());
 
-		// init CTA event storage and rule checking system only after all other systems have been
-		// started to avoid overlaying CTA mesages during startup
-		CallToActionScheduler.INSTANCE.init();
+		// If the CTA extension was not loaded for whatever reason, kill the CTA event aggregator to avoid useless event map bloating
+		if (!CtaEventAggregator.INSTANCE.isCtaSystemLive()) {
+			CtaEventAggregator.INSTANCE.killAggregator();
+		}
 
 		// After all is done, clean up memory for the best possible starting conditions
-		if (Boolean.parseBoolean(ParameterService.getParameterValue(RapidMiner.PROPERTY_RAPIDMINER_UPDATE_BETA_FEATURES))) {
-			System.gc();
-		}
+		System.gc();
 	}
 
 	private void setupToolTipManager() {
 		// setup tool tip text manager
 		ToolTipManager manager = ToolTipManager.sharedInstance();
 		manager.setDismissDelay(25000); // original: 4000
-		manager.setInitialDelay(1500);   // original: 750
+		manager.setInitialDelay(1125);   // original: 750
 		manager.setReshowDelay(50);    // original: 500
+		// heavyweight popups are necessary because of native Chromium window by our browser extension (JxBrowser)
+		manager.setLightWeightPopupEnabled(false);
 	}
 
 	/**
 	 * This default implementation only setup the tool tip durations. Subclasses might override this
 	 * method.
 	 */
-	protected void setupGUI() throws NoOpUserError {
+	protected void setupGUI() throws Exception {
 		System.setProperty(BookmarkIO.PROPERTY_BOOKMARKS_DIR, FileSystemService.getUserRapidMinerDir().getAbsolutePath());
 		System.setProperty(BookmarkIO.PROPERTY_BOOKMARKS_FILE, ".bookmarks");
 
@@ -542,6 +558,11 @@ public class RapidMinerGUI extends RapidMiner {
 				Map<String, Object> macUIDefaults = new HashMap<>();
 				macUIDefaults.put("MenuBarUI", UIManager.get("MenuBarUI"));
 				UIManager.setLookAndFeel(new RapidLookAndFeel(macUIDefaults));
+
+				// tooltips are painted behind heavyweight windows (e.g. the native Chromium browser window) on OS X
+				// despite the call above of ToolTipManager#setLightWeightPopupEnabled(false);
+				// so we force a heavyweight popup factory for OS X
+				PopupFactory.setSharedInstance(new HeavyweightOSXPopupFactory());
 			} else {
 				UIManager.setLookAndFeel(new RapidLookAndFeel());
 			}
@@ -549,6 +570,9 @@ public class RapidMinerGUI extends RapidMiner {
 			LogService.getRoot().log(Level.WARNING, I18N.getMessage(LogService.getRoot().getResourceBundle(),
 					"com.rapidminer.gui.RapidMinerGUI.setting_up_modern_look_and_feel_error"), e);
 		}
+
+		// needed because of native browser window which otherwise renders above all popup menus
+		JPopupMenu.setDefaultLightWeightPopupEnabled(false);
 	}
 
 	public static void setMainFrame(final MainFrame mf) {
@@ -678,7 +702,7 @@ public class RapidMinerGUI extends RapidMiner {
 		}
 	}
 
-	private static void saveGUIProperties() {
+	static void saveGUIProperties() {
 		Properties properties = new Properties();
 		MainFrame mainFrame = getMainFrame();
 		if (mainFrame != null) {
@@ -731,10 +755,9 @@ public class RapidMinerGUI extends RapidMiner {
 				}
 			}
 			try {
-				mainFrame.setLocation(Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_X)),
-						Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_Y)));
-				mainFrame.setSize(new Dimension(Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_WIDTH)),
-						Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_HEIGHT))));
+				int x = Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_X));
+				int y = Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_Y));
+				mainFrame.setLocation(x, y);
 				int extendedState;
 				if (properties.getProperty(PROPERTY_GEOMETRY_EXTENDED_STATE) == null) {
 					extendedState = Frame.NORMAL;
@@ -742,6 +765,25 @@ public class RapidMinerGUI extends RapidMiner {
 					extendedState = Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_EXTENDED_STATE));
 				}
 				mainFrame.setExtendedState(extendedState);
+				if ((extendedState & JFrame.MAXIMIZED_BOTH) != JFrame.MAXIMIZED_BOTH) {
+					int width = Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_WIDTH));
+					int height = Integer.parseInt(properties.getProperty(PROPERTY_GEOMETRY_HEIGHT));
+					if (SystemInfoUtilities.getOperatingSystem() == OperatingSystem.OSX) {
+						// OS X likes to set up size 0px * 0px if height exceeds available height, so make sure it does not
+						GraphicsConfiguration graphicsConfig = mainFrame.getGraphicsConfiguration();
+						if (graphicsConfig != null) {
+							Insets insets = Toolkit.getDefaultToolkit().getScreenInsets(graphicsConfig);
+							int xInsets = insets.left + insets.right;
+							// random further -15px because a precise calculation does still produce above 0px error
+							int yInsets = insets.top + insets.bottom + 15;
+							int availableWidth = graphicsConfig.getDevice().getDisplayMode().getWidth() - xInsets;
+							int availableHeight = graphicsConfig.getDevice().getDisplayMode().getHeight() - yInsets;
+							width = Math.min(width, availableWidth - x);
+							height = Math.min(height, availableHeight - y);
+						}
+					}
+					mainFrame.setSize(new Dimension(width, height));
+				}
 				mainFrame.getPropertyPanel()
 						.setExpertMode(Boolean.valueOf(properties.getProperty(PROPERTY_EXPERT_MODE)).booleanValue());
 
@@ -751,7 +793,9 @@ public class RapidMinerGUI extends RapidMiner {
 					mainFrame.getPropertyPanel().setShowParameterHelp(true);
 				} else {
 					mainFrame.getPropertyPanel().setShowParameterHelp(Boolean.valueOf(showHelpProperty).booleanValue());
-
+				}
+				if (SystemInfoUtilities.getOperatingSystem() == OperatingSystem.OSX) {
+					OSXAdapter.checkForFullScreen(mainFrame);
 				}
 			} catch (NumberFormatException e) {
 				setDefaultGUIProperties();
@@ -791,7 +835,7 @@ public class RapidMinerGUI extends RapidMiner {
 				if (args.length >= 1) {
 					String arg = args[0];
 					if (arg.startsWith(RapidMiner.RAPIDMINER_URL_PREFIX)) {
-						handleRapidMinerURL(args[0]);
+						RMUrlHandler.handleUrl(args[0]);
 					} else if (!args[0].trim().isEmpty()) {
 						OpenAction.open(args[0], false);
 					}
@@ -832,8 +876,10 @@ public class RapidMinerGUI extends RapidMiner {
 		RapidMiner.setInputHandler(new GUIInputHandler());
 
 		new RapidMinerGUI().run(openLocation);
+		// make sure urls of type 'rm://{action}' can be used
+		RMUrlHandler.initActions();
 		if (rapidminerURL != null) {
-			handleRapidMinerURL(rapidminerURL);
+			RMUrlHandler.handleUrl(rapidminerURL);
 		}
 	}
 
@@ -859,65 +905,20 @@ public class RapidMinerGUI extends RapidMiner {
 		}
 	}
 
+	/**
+	 * @deprecated since 7.0, use {@link com.rapidminer.gui.look.Colors} constants instead
+	 */
+	@Deprecated
 	public static Color getBodyHighlightColor() {
 		return new Color(255, 255, 242);
 	}
 
+	/**
+	 * @deprecated since 7.0, use {@link com.rapidminer.gui.look.Colors} constants instead
+	 */
+	@Deprecated
 	public static Color getBorderHighlightColor() {
 		return SwingTools.RAPIDMINER_ORANGE;
-	}
-
-	/**
-	 * Called with rapidminer:// URLs passed as command line arguments. Currently the only supported
-	 * pattern is rapidminer://extension/{extensionkey} to install an extension with the given name.
-	 *
-	 * This method just logs a warning method if it cannot handle the rapidminer:// URL for
-	 * syntactical reasons.
-	 *
-	 * @throws IllegalArgumentException
-	 *             if this is not a rapidminer:// url
-	 */
-	private static void handleRapidMinerURL(String urlStr) {
-		URI url;
-
-		try {
-			url = new URI(urlStr);
-		} catch (URISyntaxException e) {
-			LogService.getRoot().log(Level.WARNING, "com.rapidminer.gui.RapidMinerGUI.malformed_rapidminer_url",
-					new Object[] { urlStr, e.getMessage() });
-			return;
-		}
-
-		if (!"rapidminer".equals(url.getScheme())) {
-			// in this case we should not be called, so throw
-			throw new IllegalArgumentException("Can handle only " + RapidMiner.RAPIDMINER_URL_PREFIX + " URLs!");
-		}
-		String path = url.getPath();
-		if (path.startsWith("/")) {
-			path = path.substring(1);
-		}
-		String components[] = path.split("/");
-		if (components.length < 2) {
-			LogService.getRoot().log(Level.WARNING, "com.rapidminer.gui.RapidMinerGUI.unknown_rapidminer_url",
-					new Object[] { urlStr });
-			return;
-		}
-		switch (components[0]) {
-			case "extension":
-				String extensionKey = components[1];
-				// asynchronous
-				try {
-					UpdateManagerRegistry.INSTANCE.get().showUpdateDialog(false, extensionKey);
-				} catch (URISyntaxException | IOException e) {
-					LogService.getRoot().log(Level.WARNING,
-							"com.rapidminer.gui.RapidMinerGUI.error_connecting_to_updateserver", e);
-				}
-				break;
-			default:
-				LogService.getRoot().log(Level.WARNING, "com.rapidminer.gui.RapidMinerGUI.unknown_rapidminer_url",
-						new Object[] { urlStr });
-				return;
-		}
 	}
 
 	/**

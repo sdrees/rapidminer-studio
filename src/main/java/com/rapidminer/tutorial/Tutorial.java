@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -33,8 +33,12 @@ import java.util.zip.ZipInputStream;
 import com.rapidminer.Process;
 import com.rapidminer.RapidMiner;
 import com.rapidminer.RepositoryProcessLocation;
+import com.rapidminer.io.process.ProcessOriginProcessXMLFilter;
+import com.rapidminer.io.process.ProcessOriginProcessXMLFilter.ProcessOriginState;
 import com.rapidminer.operator.FlagUserData;
+import com.rapidminer.repository.IOObjectEntry;
 import com.rapidminer.repository.MalformedRepositoryLocationException;
+import com.rapidminer.repository.ProcessEntry;
 import com.rapidminer.repository.RepositoryException;
 import com.rapidminer.repository.RepositoryLocation;
 import com.rapidminer.repository.resource.ZipStreamResource;
@@ -244,6 +248,7 @@ public class Tutorial implements ZipStreamResource {
 		RepositoryProcessLocation repoLocation = new RepositoryProcessLocation(new RepositoryLocation(processLocation));
 		Process newProcess = new Process(repoLocation.getRawXML());
 		newProcess.getRootOperator().setUserData(KEY_USER_DATA_FLAG, new FlagUserData());
+		ProcessOriginProcessXMLFilter.setProcessOriginState(newProcess, ProcessOriginState.GENERATED_TUTORIAL);
 		return newProcess;
 	}
 
@@ -270,9 +275,9 @@ public class Tutorial implements ZipStreamResource {
 						defaultProps.load(zip);
 					} else if (localeFileName.equals(entryName.replaceFirst(folder, ""))) {
 						localProps.load(zip);
-					} else if (entryName.endsWith(".rmp")) {
+					} else if (entryName.endsWith(ProcessEntry.RMP_SUFFIX)) {
 						processName = Paths.get(entryName).getFileName().toString().split("\\.")[0];
-					} else if (entryName.endsWith(".ioo")) {
+					} else if (entryName.endsWith(IOObjectEntry.IOO_SUFFIX)) {
 						demoData.add(Paths.get(entryName).getFileName().toString().split("\\.")[0]);
 					}
 				}

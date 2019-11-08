@@ -1,18 +1,18 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
- * 
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
+ *
  * Complete list of developers available at our web site:
- * 
+ *
  * http://rapidminer.com
- * 
+ *
  * This program is free software: you can redistribute it and/or modify it under the terms of the
  * GNU Affero General Public License as published by the Free Software Foundation, either version 3
  * of the License, or (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
  * even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * Affero General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Affero General Public License along with this program.
  * If not, see http://www.gnu.org/licenses/.
 */
@@ -36,11 +36,13 @@ import java.lang.reflect.Constructor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Enumeration;
-import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 import javax.swing.Action;
 import javax.swing.Icon;
 import javax.swing.JComponent;
@@ -50,8 +52,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.event.EventListenerList;
 import javax.swing.event.TreeExpansionEvent;
 import javax.swing.event.TreeExpansionListener;
-import javax.swing.event.TreeSelectionEvent;
-import javax.swing.event.TreeSelectionListener;
+import javax.swing.tree.TreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 
@@ -63,6 +64,7 @@ import com.rapidminer.gui.dnd.AbstractPatchedTransferHandler;
 import com.rapidminer.gui.dnd.DragListener;
 import com.rapidminer.gui.dnd.RepositoryLocationList;
 import com.rapidminer.gui.dnd.TransferableOperator;
+import com.rapidminer.gui.dnd.TransferableRepositoryEntry;
 import com.rapidminer.gui.tools.ProgressThread;
 import com.rapidminer.gui.tools.ProgressThreadDialog;
 import com.rapidminer.gui.tools.RepositoryGuiTools;
@@ -74,27 +76,37 @@ import com.rapidminer.gui.tools.components.ToolTipWindow.TipProvider;
 import com.rapidminer.gui.tools.components.ToolTipWindow.TooltipLocation;
 import com.rapidminer.gui.tools.dialogs.ConfirmDialog;
 import com.rapidminer.gui.tools.dialogs.SelectionDialog;
+import com.rapidminer.repository.ConnectionEntry;
 import com.rapidminer.repository.DataEntry;
 import com.rapidminer.repository.Entry;
 import com.rapidminer.repository.Folder;
 import com.rapidminer.repository.ProcessEntry;
 import com.rapidminer.repository.Repository;
 import com.rapidminer.repository.RepositoryActionCondition;
+import com.rapidminer.repository.RepositoryActionConditionAdditionallyNotConnections;
 import com.rapidminer.repository.RepositoryActionConditionImplConfigRepository;
 import com.rapidminer.repository.RepositoryActionConditionImplStandard;
-import com.rapidminer.repository.RepositoryActionConditionImplStandardNoRepository;
+import com.rapidminer.repository.RepositoryActionConditionRepositoryAndConnections;
+import com.rapidminer.repository.RepositoryConnectionsFolderImmutableException;
+import com.rapidminer.repository.RepositoryConnectionsNotSupportedException;
 import com.rapidminer.repository.RepositoryException;
 import com.rapidminer.repository.RepositoryLocation;
 import com.rapidminer.repository.RepositoryManager;
+import com.rapidminer.repository.RepositoryNotConnectionsFolderException;
 import com.rapidminer.repository.RepositorySortingMethod;
 import com.rapidminer.repository.RepositorySortingMethodListener;
+import com.rapidminer.repository.RepositoryStoreOtherInConnectionsFolderException;
+import com.rapidminer.repository.RepositoryTools;
 import com.rapidminer.repository.gui.actions.AbstractRepositoryAction;
+import com.rapidminer.repository.gui.actions.CheckProcessCompatibility;
 import com.rapidminer.repository.gui.actions.ConfigureRepositoryAction;
 import com.rapidminer.repository.gui.actions.CopyEntryRepositoryAction;
 import com.rapidminer.repository.gui.actions.CopyLocationAction;
+import com.rapidminer.repository.gui.actions.CreateConnectionAction;
 import com.rapidminer.repository.gui.actions.CreateFolderAction;
 import com.rapidminer.repository.gui.actions.CutEntryRepositoryAction;
 import com.rapidminer.repository.gui.actions.DeleteRepositoryEntryAction;
+import com.rapidminer.repository.gui.actions.EditConnectionAction;
 import com.rapidminer.repository.gui.actions.OpenEntryAction;
 import com.rapidminer.repository.gui.actions.OpenInFileBrowserAction;
 import com.rapidminer.repository.gui.actions.PasteEntryRepositoryAction;
@@ -104,12 +116,15 @@ import com.rapidminer.repository.gui.actions.ShowProcessInRepositoryAction;
 import com.rapidminer.repository.gui.actions.SortByLastModifiedAction;
 import com.rapidminer.repository.gui.actions.SortByNameAction;
 import com.rapidminer.repository.gui.actions.StoreProcessAction;
+import com.rapidminer.repository.internal.remote.RemoteRepository;
 import com.rapidminer.repository.local.LocalRepository;
 import com.rapidminer.studio.io.gui.internal.DataImportWizardBuilder;
+import com.rapidminer.studio.io.gui.internal.DataImportWizardUtils;
 import com.rapidminer.tools.I18N;
 import com.rapidminer.tools.LogService;
 import com.rapidminer.tools.PasswordInputCanceledException;
 import com.rapidminer.tools.ProgressListener;
+import com.rapidminer.tools.usagestats.ActionStatisticsCollector;
 
 
 /**
@@ -195,16 +210,22 @@ public class RepositoryTree extends JTree {
 
 					final RepositoryLocation location = (RepositoryLocation) ts.getTransferable()
 							.getTransferData(TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_FLAVOR);
-					List<RepositoryLocation> singleLocationList = new LinkedList<>();
-					singleLocationList.add(location);
-					return copyOrMoveRepositoryEntries(droppedOnEntry, singleLocationList, ts);
+					return copyOrMoveRepositoryEntries(droppedOnEntry, Collections.singletonList(location), ts);
 
 				} else if (flavors.contains(TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_LIST_FLAVOR)) {
 					// Multiple repository entries
 
-					RepositoryLocationList locationList = (RepositoryLocationList) ts.getTransferable()
+					Object transferData = ts.getTransferable()
 							.getTransferData(TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_LIST_FLAVOR);
-					List<RepositoryLocation> locations = locationList.getAll();
+					List<RepositoryLocation> locations;
+					if (transferData instanceof RepositoryLocationList) {
+						locations = ((RepositoryLocationList) transferData).getAll();
+					} else if (transferData instanceof RepositoryLocation[]) {
+						locations = Arrays.asList((RepositoryLocation[]) transferData);
+					} else {
+						// should not happen
+						return false;
+					}
 					return copyOrMoveRepositoryEntries(droppedOnEntry, locations, ts);
 
 				} else if (flavors.contains(DataFlavor.javaFileListFlavor)) {
@@ -214,6 +235,7 @@ public class RepositoryTree extends JTree {
 					List<File> files = (List<File>) ts.getTransferable().getTransferData(DataFlavor.javaFileListFlavor);
 					File file = files.get(0);
 					DataImportWizardBuilder builder = new DataImportWizardBuilder();
+					builder.setCallback(DataImportWizardUtils.showInResultsCallback());
 					builder.forFile(file.toPath()).build(owner).getDialog().setVisible(true);
 					return true;
 				} else {
@@ -236,12 +258,23 @@ public class RepositoryTree extends JTree {
 		 *
 		 * Additionally, at first it is checked, if the operations are allowed.
 		 */
-		private boolean copyOrMoveRepositoryEntries(final Entry droppedOnEntry, final List<RepositoryLocation> locations,
+		private boolean copyOrMoveRepositoryEntries(Entry droppedOnEntry, final List<RepositoryLocation> locations,
 				final TransferSupport ts) throws RepositoryException {
+
+			final Folder droppedOnFolder;
+			if (droppedOnEntry instanceof Folder) {
+				droppedOnFolder = (Folder) droppedOnEntry;
+			} else if (isMoveOperation(ts, false)) {
+				// ignore move operations that don't target a folder
+				return false;
+			} else {
+				// use parent folder for copy operations
+				droppedOnFolder = droppedOnEntry.getContainingFolder();
+			}
 
 			// First check, if operation is allowed for all locations
 			for (RepositoryLocation location : locations) {
-				if (!copyOrMoveCheck(droppedOnEntry, location, ts)) {
+				if (!copyOrMoveCheck(droppedOnFolder, location, ts)) {
 					return false;
 				}
 			}
@@ -293,8 +326,7 @@ public class RepositoryTree extends JTree {
 						isSingleEntryOperation = false;
 					}
 
-					TreePath droppedOnPath = RepositoryTreeModel.getPathTo(droppedOnEntry,
-							RepositoryManager.getInstance(null));
+					TreePath droppedOnPath = getModel().getPathTo(droppedOnFolder);
 
 					// Initialize progress listener
 					getProgressListener().setTotal(locations.size() * PROGRESS_LISTENER_SINGLE_STEP_SIZE);
@@ -307,18 +339,18 @@ public class RepositoryTree extends JTree {
 						try {
 							// Entry already exists, overwrite?
 							final String effectiveNewName = location.locateEntry().getName();
-							if (((Folder) droppedOnEntry).containsEntry(effectiveNewName)) {
+							if (droppedOnFolder.containsEntry(effectiveNewName)) {
 
 								// Do not confuse user with incorrect selected paths
 								RepositoryTree.this.setSelectionPath(droppedOnPath);
 
 								if (!userDecisions.repeatDecision) {
 
-									final List<String> optionsToSelect = new LinkedList<>();
+									final List<String> optionsToSelect = new ArrayList<>(3);
 									optionsToSelect.add("existing_entry.insert");
 									optionsToSelect.add("existing_entry.overwrite");
 									optionsToSelect.add("existing_entry.skip");
-									final List<String> optionsToCheck = new LinkedList<>();
+									final List<String> optionsToCheck = new ArrayList<>(1);
 									if (!isSingleEntryOperation) {
 										optionsToCheck.add("existing_entry.repeat");
 									}
@@ -371,7 +403,7 @@ public class RepositoryTree extends JTree {
 
 						// Do copy or move operation
 						// Extracted to own method for lock handling and retry calls
-						boolean done = executeCopyOrMoveOperation(location, isRepositoryInLocations, isSingleEntryOperation,
+						boolean done = executeCopyOrMoveOperation(location, droppedOnFolder, isRepositoryInLocations, isSingleEntryOperation,
 								userDecisions.overwriteIfExists);
 						if (!done) {
 							break;
@@ -382,16 +414,11 @@ public class RepositoryTree extends JTree {
 
 					// On multi-operations, select the target folder after finishing copy/move
 					// operation
-					if (droppedOnEntry != null && !isSingleEntryOperation) {
-						SwingUtilities.invokeLater(new Runnable() {
-
-							@Override
-							public void run() {
-								TreePath droppedOnPath = RepositoryTreeModel.getPathTo(droppedOnEntry,
-										RepositoryManager.getInstance(null));
-								RepositoryTree.this.setSelectionPath(droppedOnPath);
-								RepositoryTree.this.scrollPathToVisible(droppedOnPath);
-							}
+					if (droppedOnFolder != null && !isSingleEntryOperation) {
+						SwingUtilities.invokeLater(() -> {
+							TreePath droppedOnPath1 = getModel().getPathTo(droppedOnFolder);
+							RepositoryTree.this.setSelectionPath(droppedOnPath1);
+							RepositoryTree.this.scrollPathToVisible(droppedOnPath1);
 						});
 					}
 
@@ -404,81 +431,138 @@ public class RepositoryTree extends JTree {
 				 * @return <code>false</code> if the user chose to cancel the operation;
 				 *         <code>true</code> otherwise
 				 */
-				private boolean executeCopyOrMoveOperation(RepositoryLocation location, boolean isRepositoryInLocations,
+				private boolean executeCopyOrMoveOperation(RepositoryLocation location, Folder target, boolean isRepositoryInLocations,
 						boolean isSingleEntryOperation, boolean overwriteIfExists) {
 					try {
-						ProgressListener progressListener = null;
-						progressListener = new RescalingProgressListener(getProgressListener(), progressListenerCompleted,
+						ProgressListener progressListener = new RescalingProgressListener(getProgressListener(), progressListenerCompleted,
 								progressListenerCompleted + PROGRESS_LISTENER_SINGLE_STEP_SIZE);
 
 						if (isMoveOperation(ts, isRepositoryInLocations)) {
-							RepositoryManager.getInstance(null).move(location, (Folder) droppedOnEntry, null,
+							RepositoryManager.getInstance(null).move(location, target, null,
 									overwriteIfExists, progressListener);
 
 							// On drag and drop move operation with overwrite, two delete operations
 							// are performed. This results in a selection of a wrong tree element.
 							// For this case, select the element, which is the target of the drop
 							// operation.
-							if (overwriteIfExists && droppedOnEntry != null) {
-								SwingUtilities.invokeLater(new Runnable() {
-
-									@Override
-									public void run() {
-										RepositoryTree.this.setSelectionPath(RepositoryTreeModel.getPathTo(droppedOnEntry,
-												RepositoryManager.getInstance(null)));
-									}
-								});
-
+							if (overwriteIfExists && target != null) {
+								SwingUtilities.invokeLater(() -> RepositoryTree.this.setSelectionPath(getModel().getPathTo(target)));
 							}
 
 						} else {
-							RepositoryManager.getInstance(null).copy(location, (Folder) droppedOnEntry, null,
+							RepositoryManager.getInstance(null).copy(location, target, null,
 									overwriteIfExists, progressListener);
 						}
-					} catch (RepositoryException e) {
-						if (e.getCause() != null && e.getCause() instanceof PasswordInputCanceledException) {
-							// no extra dialog if login dialog was canceled
-							return false;
+					} catch (RepositoryConnectionsFolderImmutableException | RepositoryStoreOtherInConnectionsFolderException | RepositoryConnectionsNotSupportedException e) {
+						// this happens when trying to modify/move/delete the connections folder or when trying to store other things inside a connection folder
+						String errorKey;
+						if (e instanceof RepositoryConnectionsFolderImmutableException) {
+							errorKey = "error_modify_connections_folder";
+						} else if (e instanceof RepositoryStoreOtherInConnectionsFolderException) {
+							errorKey = "error_copy_other_to_connections_folder";
+						} else {
+							errorKey = "error_connections_not_supported";
 						}
-						// Do not show "cancel" option, if is is an single entry operation
-						int dialogMode = ConfirmDialog.YES_NO_CANCEL_OPTION;
+						final String locationName = location.getName() == null ? "" : location.getName();
+						final AtomicInteger result = new AtomicInteger();
+
 						if (isSingleEntryOperation) {
-							dialogMode = ConfirmDialog.YES_NO_OPTION;
+							SwingTools.invokeAndWait(() -> SwingTools.showVerySimpleErrorMessage(ProgressThreadDialog.getInstance(), errorKey, locationName));
+						} else {
+							SwingTools.invokeAndWait(() -> {
+								final ConfirmDialog dialog = new ConfirmDialog(ProgressThreadDialog.getInstance(), errorKey,
+										ConfirmDialog.OK_CANCEL_OPTION, false, locationName);
+								dialog.setVisible(true);
+								result.set(dialog.getReturnOption());
+							});
+							if (result.get() == ConfirmDialog.CANCEL_OPTION) {
+								// user cancels whole copy operation. No need to log, as this is not an unexpected error state
+								return false;
+							}
+						}
+					} catch (RepositoryNotConnectionsFolderException e) {
+						// this happens when trying to move a connection into a non-connection special folder AND that repository knows about this
+						// we offer to automatically move them to the appropriate connections folder for that repository instead
+						final int dialogMode = isSingleEntryOperation ? ConfirmDialog.YES_NO_OPTION : ConfirmDialog.YES_NO_CANCEL_OPTION;
+						final String locationName = location.getName() == null ? "" : location.getName();
+						final AtomicInteger result = new AtomicInteger();
+						Folder repoConnectionsFolder = null;
+						try {
+							repoConnectionsFolder = RepositoryTools.getConnectionFolder(target.getLocation().getRepository());
+						} catch (RepositoryException e1) {
+							LogService.getRoot().log(Level.WARNING,
+									"com.rapidminer.repository.RepositoryTree.error_resolving_connections_folder", e1);
 						}
 
-						String locationName = location.getName();
-						if (locationName == null) {
-							locationName = "";
-						}
+						if (repoConnectionsFolder != null) {
+							String connLocRepo = repoConnectionsFolder.getLocation().getRepositoryName();
+							SwingTools.invokeAndWait(() -> {
+								final ConfirmDialog dialog = new ConfirmDialog(ProgressThreadDialog.getInstance(), "error_copy_to_non_connections_folder",
+										dialogMode, false, e.getMessage(), locationName, connLocRepo);
+								dialog.setVisible(true);
+								result.set(dialog.getReturnOption());
+							});
 
-						ConfirmDialog dialog = null;
+							// user wants to automatically target the connection to the connections folder, then do it
+							// otherwise, we do nothing as logging is pointless for a non-error scenario
+							if (result.get() == ConfirmDialog.YES_OPTION) {
+								return executeCopyOrMoveOperation(location, repoConnectionsFolder, isRepositoryInLocations, isSingleEntryOperation,
+										overwriteIfExists);
+							}
+						} else {
+							// if we for whatever reason cannot resolve the repository connections folder, we go to the regular error handling
+							return handleRepoException(e, location, target, isRepositoryInLocations, isSingleEntryOperation, overwriteIfExists);
+						}
+					} catch (RepositoryException e) {
+						return handleRepoException(e, location, target, isRepositoryInLocations, isSingleEntryOperation, overwriteIfExists);
+					}
+					return true;
+				}
+
+				/**
+				 * Handles a repository exception during copy/move.
+				 * @return {@code true} if user pressed retry and it worked OR if he pressed no-retry; {@code false} if user pressed cancel
+				 */
+				private boolean handleRepoException(RepositoryException e, RepositoryLocation location, Folder target, boolean isRepositoryInLocations, boolean isSingleEntryOperation, boolean overwriteIfExists) {
+					if (e.getCause() != null && e.getCause() instanceof PasswordInputCanceledException) {
+						// no extra dialog if login dialog was canceled
+						return false;
+					}
+					// Do not show "cancel" option, if is is an single entry operation
+					final int dialogMode = isSingleEntryOperation ? ConfirmDialog.YES_NO_OPTION : ConfirmDialog.YES_NO_CANCEL_OPTION;
+					final String locationName = location.getName() == null ? "" : location.getName();
+					final AtomicInteger result = new AtomicInteger();
+
+					SwingTools.invokeAndWait(() -> {
+						final ConfirmDialog dialog;
 						if (e.getMessage() != null && !e.getMessage().isEmpty()) {
 							dialog = new ConfirmDialog(ProgressThreadDialog.getInstance(), "error_in_copy_entry_with_cause",
 									dialogMode, false, locationName, e.getMessage());
 						} else {
-							dialog = new ConfirmDialog(ProgressThreadDialog.getInstance(), "error_in_copy_entry", dialogMode,
-									false, locationName);
+							dialog = new ConfirmDialog(ProgressThreadDialog.getInstance(), "error_in_copy_entry",
+									dialogMode, false, locationName);
 						}
 						dialog.setVisible(true);
-						int retry = dialog.getReturnOption();
+						result.set(dialog.getReturnOption());
+					});
 
-						if (retry == ConfirmDialog.YES_OPTION) {
-							return executeCopyOrMoveOperation(location, isRepositoryInLocations, isSingleEntryOperation,
-									overwriteIfExists);
+					if (result.get() == ConfirmDialog.YES_OPTION) {
+						return executeCopyOrMoveOperation(location, target, isRepositoryInLocations, isSingleEntryOperation,
+								overwriteIfExists);
 
-						} else if (retry == ConfirmDialog.CANCEL_OPTION) {
-							LogService.getRoot().log(Level.WARNING,
-									"com.rapidminer.repository.RepositoryTree.error_during_copying", e);
-							return false;
+					} else if (result.get() == ConfirmDialog.CANCEL_OPTION) {
+						LogService.getRoot().log(Level.WARNING,
+								"com.rapidminer.repository.RepositoryTree.error_during_copying", e);
+						return false;
 
-						} else {
-							LogService.getRoot().log(Level.WARNING,
-									"com.rapidminer.repository.RepositoryTree.error_during_copying", e);
-							// No retry and no cancel, just go on
-						}
+					} else {
+						// user pressed "no-retry", so log and return true
+						LogService.getRoot().log(Level.WARNING,
+								"com.rapidminer.repository.RepositoryTree.error_during_copying", e);
+						return true;
 					}
-					return true;
 				}
+
 			}.start();
 
 			// No failures in initial check
@@ -511,7 +595,7 @@ public class RepositoryTree extends JTree {
 
 			} else {
 				// Check for unknown parameters
-				RepositoryLocation targetLocation = ((Folder) droppedOnEntry).getLocation();
+				RepositoryLocation targetLocation = droppedOnEntry.getLocation();
 				if (targetLocation == null) {
 					LogService.getRoot().log(Level.WARNING,
 							"com.rapidminer.repository.RepositoryTree.parameter_missing.target_location");
@@ -533,6 +617,10 @@ public class RepositoryTree extends JTree {
 				if (locationEntry == null) {
 					LogService.getRoot().log(Level.WARNING,
 							"com.rapidminer.repository.RepositoryTree.parameter_missing.repository_location");
+					return false;
+				}
+				if (locationEntry instanceof Repository) {
+					SwingTools.showVerySimpleErrorMessage("repository_copy_repository");
 					return false;
 				}
 				String effectiveNewName = locationEntry.getName();
@@ -602,82 +690,18 @@ public class RepositoryTree extends JTree {
 
 		@Override
 		protected Transferable createTransferable(JComponent c) {
-
-			final TreePath[] treePaths = getSelectionPaths();
-
-			if (treePaths.length == 0) {
+			final List<Entry> selectedEntries = getSelectedEntries();
+			if (selectedEntries.isEmpty()) {
 				// Nothing selected
-
 				return null;
-
-			} else if (treePaths.length == 1) {
-				// Exactly one item selected
-
-				Entry e = (Entry) treePaths[0].getLastPathComponent();
-				final RepositoryLocation location = e.getLocation();
-				return new Transferable() {
-
-					@Override
-					public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException {
-						if (flavor.equals(DataFlavor.stringFlavor)) {
-							return location.getAbsoluteLocation();
-						} else if (TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_FLAVOR.equals(flavor)) {
-							return location;
-						} else {
-							throw new UnsupportedFlavorException(flavor);
-						}
-					}
-
-					@Override
-					public DataFlavor[] getTransferDataFlavors() {
-						return new DataFlavor[] { TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_FLAVOR,
-								DataFlavor.stringFlavor };
-					}
-
-					@Override
-					public boolean isDataFlavorSupported(DataFlavor flavor) {
-						return TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_FLAVOR.equals(flavor)
-								|| DataFlavor.stringFlavor.equals(flavor);
-					}
-				};
-
-			} else {
-				// Multiple entries selected
-
-				final RepositoryLocationList locationList = new RepositoryLocationList();
-				for (TreePath treePath : treePaths) {
-					locationList.add(((Entry) treePath.getLastPathComponent()).getLocation());
-				}
-				locationList.removeIntersectedLocations();
-
-				return new Transferable() {
-
-					final RepositoryLocationList locations = locationList;
-
-					@Override
-					public boolean isDataFlavorSupported(DataFlavor flavor) {
-						return TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_LIST_FLAVOR.equals(flavor)
-								|| DataFlavor.stringFlavor.equals(flavor);
-					}
-
-					@Override
-					public DataFlavor[] getTransferDataFlavors() {
-						return new DataFlavor[] { TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_LIST_FLAVOR,
-								DataFlavor.stringFlavor };
-					}
-
-					@Override
-					public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException {
-						if (TransferableOperator.LOCAL_TRANSFERRED_REPOSITORY_LOCATION_LIST_FLAVOR.equals(flavor)) {
-							return locations;
-						} else if (DataFlavor.stringFlavor.equals(flavor)) {
-							return locations.toString();
-						} else {
-							throw new UnsupportedFlavorException(flavor);
-						}
-					}
-				};
 			}
+
+			List<RepositoryLocation> locationList = getSelectedEntries().stream().map(Entry::getLocation).collect(Collectors.toList());
+			RepositoryLocation[] repositoryLocations = RepositoryLocation.removeIntersectedLocations(locationList).toArray(new RepositoryLocation[0]);
+			TransferableRepositoryEntry transferable = new TransferableRepositoryEntry(repositoryLocations);
+			transferable.setUsageStatsLogger(
+					() -> ActionStatisticsCollector.getInstance().log(ActionStatisticsCollector.TYPE_REPOSITORY_TREE, "inserted", null));
+			return transferable;
 		}
 
 		@Override
@@ -689,11 +713,10 @@ public class RepositoryTree extends JTree {
 		 * Checks, if the current operation is a MOVE operation. If not, it is a COPY operation.
 		 *
 		 * @param ts
-		 *            Provides info about the current operation
+		 * 		Provides info about the current operation
 		 * @param isRepositoryInLocations
-		 *            This is true, if the sources to copy contain a repository. Repositories can
-		 *            not be moved. This results in a copy operation.
-		 * @return true, if the operation is a move operation
+		 * 		This is true, if the sources to copy contain a repository. Repositories can
+		 * 		not be moved. This results in a copy operation.
 		 * @return false, if the operation is not a move operation (e.g. copy)
 		 */
 		private boolean isMoveOperation(TransferSupport ts, boolean isRepositoryInLocations) {
@@ -739,6 +762,8 @@ public class RepositoryTree extends JTree {
 		}
 	}
 
+	private final Dialog owner;
+
 	public final AbstractRepositoryAction<Entry> RENAME_ACTION = new RenameRepositoryEntryAction(this);
 
 	public final AbstractRepositoryAction<Entry> DELETE_ACTION = new DeleteRepositoryEntryAction(this);
@@ -751,57 +776,59 @@ public class RepositoryTree extends JTree {
 
 	public final ResourceActionAdapter SHOW_PROCESS_IN_REPOSITORY_ACTION = new ShowProcessInRepositoryAction(this);
 
-	private final Dialog owner;
-
-	private List<AbstractRepositoryAction<?>> listToEnable = new LinkedList<>();
+	private List<AbstractRepositoryAction<?>> listToEnable = new ArrayList<>();
 
 	private EventListenerList listenerList = new EventListenerList();
 
+	// must be after the treeModel, since they require it to be initialized
 	final ToggleAction SORT_BY_NAME_ACTION = new SortByNameAction(this);
-
 	final ToggleAction SORT_BY_LAST_MODIFIED_DATE_ACTION = new SortByLastModifiedAction(this);
 
 	private static final long serialVersionUID = -6613576606220873341L;
 
-	private static final List<RepositoryActionEntry> REPOSITORY_ACTIONS = new LinkedList<>();
+	private static final List<RepositoryActionEntry> REPOSITORY_ACTIONS = new ArrayList<>();
 
 	/** List of actions available for multiple entries selected in menu */
-	private static final List<RepositoryActionEntry> REPOSITORY_MULTIPLE_ENTRIES_ACTIONS = new LinkedList<>();
+	private static final List<RepositoryActionEntry> REPOSITORY_MULTIPLE_ENTRIES_ACTIONS = new ArrayList<>();
 
 	/** Configuration: List of actions available for multiple entries selected in menu */
-	private static final List<String> multipleMenuEntriesActionClasses = new LinkedList<>(
+	private static final List<String> multipleMenuEntriesActionClasses = new ArrayList<>(
 			Arrays.asList(CutEntryRepositoryAction.class.getName(), CopyEntryRepositoryAction.class.getName(),
 					DeleteRepositoryEntryAction.class.getName(), RefreshRepositoryEntryAction.class.getName()));
 
 	private final int TREE_ROW_HEIGHT = 24;
 
 	static {
-		addRepositoryAction(ConfigureRepositoryAction.class, new RepositoryActionConditionImplConfigRepository(), false,
-				true);
+		addRepositoryAction(ConfigureRepositoryAction.class, new RepositoryActionConditionImplConfigRepository(), false, true);
 		addRepositoryAction(OpenEntryAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] { DataEntry.class }, new Class<?>[] {}), false,
-				false);
-		addRepositoryAction(StoreProcessAction.class, new RepositoryActionConditionImplStandard(
-				new Class<?>[] { ProcessEntry.class, Folder.class }, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionImplStandard(new Class<?>[]{DataEntry.class}), false, false);
+		addRepositoryAction(StoreProcessAction.class,
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[]{ProcessEntry.class, Folder.class},
+						true, true), false, false);
 		addRepositoryAction(RenameRepositoryEntryAction.class,
-				new RepositoryActionConditionImplStandardNoRepository(new Class<?>[] { Entry.class }, new Class<?>[] {}),
-				false, false);
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[]{Entry.class}, false), false, false);
+		addRepositoryAction(EditConnectionAction.class, new RepositoryActionConditionImplStandard(new Class<?>[]{ConnectionEntry.class}, new Class<?>[]{LocalRepository.class, RemoteRepository.class}), false,
+				false);
+		addRepositoryAction(CreateConnectionAction.class, new RepositoryActionConditionRepositoryAndConnections(new Class<?>[]{Folder.class}), false,
+				false);
 		addRepositoryAction(CreateFolderAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] { Folder.class }, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[]{Folder.class}, true, true), false, false);
 		addRepositoryAction(CutEntryRepositoryAction.class,
-				new RepositoryActionConditionImplStandardNoRepository(new Class<?>[] {}, new Class<?>[] {}), true, false);
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[0], false), true, false);
 		addRepositoryAction(CopyEntryRepositoryAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] {}, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[0], false), false, false);
 		addRepositoryAction(PasteEntryRepositoryAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] {}, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionImplStandard(new Class<?>[0]), false, false);
 		addRepositoryAction(CopyLocationAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] {}, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionImplStandard(new Class<?>[0]), false, false);
 		addRepositoryAction(DeleteRepositoryEntryAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] { Entry.class }, new Class<?>[] {}), false, false);
+				new RepositoryActionConditionAdditionallyNotConnections(new Class<?>[]{Entry.class}, true), false, false);
 		addRepositoryAction(RefreshRepositoryEntryAction.class,
-				new RepositoryActionConditionImplStandard(new Class<?>[] { Entry.class }, new Class<?>[] {}), true, false);
+				new RepositoryActionConditionImplStandard(new Class<?>[]{Entry.class}), true, false);
 		addRepositoryAction(OpenInFileBrowserAction.class, new RepositoryActionConditionImplStandard(
-				new Class<?>[] { Entry.class }, new Class<?>[] { LocalRepository.class }), false, false);
+				new Class<?>[]{Entry.class}, new Class<?>[]{LocalRepository.class}), false, false);
+		addRepositoryAction(CheckProcessCompatibility.class,
+				new RepositoryActionConditionImplStandard(new Class<?>[]{ProcessEntry.class}, new Class<?>[]{RemoteRepository.class}), true, true);
 	}
 
 	public RepositoryTree() {
@@ -824,20 +851,34 @@ public class RepositoryTree extends JTree {
 		this(owner, onlyFolders, onlyWritableRepositories, installDraghandler, null);
 	}
 
-	/**
-	 * @param installDraghandler
-	 *            when true, the {@link RepositoryTreeTransferhandler} is installed and the user is
-	 *            able to drag/drop data.
-	 * @param backgroundColor
-	 *            if {@code null} the default background color will be used, otherwise the provided
-	 *            background color will be used
-	 */
 	public RepositoryTree(Dialog owner, boolean onlyFolders, boolean onlyWritableRepositories, boolean installDraghandler,
 			final Color backgroundColor) {
-		super(new RepositoryTreeModel(RepositoryManager.getInstance(null), onlyFolders, onlyWritableRepositories));
-		this.owner = owner;
-		((RepositoryTreeModel) getModel()).setParentTree(this);
+		this(owner, onlyFolders, onlyWritableRepositories, installDraghandler, backgroundColor, null);
+	}
 
+	/**
+	 * Create a new RepositoryTree, configure it directly in the constructor
+	 *
+	 * @param owner
+	 * 		the dialog that is the owner of this tree, used when creating subdialogs
+	 * @param onlyFolders
+	 * 		if true only show repositories and folders, no entries
+	 * @param onlyWritableRepositories
+	 * 		if true only show writable repositories and their content
+	 * @param installDraghandler
+	 * 		when true, the {@link RepositoryTreeTransferhandler} is installed and the user is
+	 * 		able to drag/drop data.
+	 * @param backgroundColor
+	 * 		if {@code null} the default background color will be used, otherwise the provided
+	 * 		background color will be used
+	 * @param predicate
+	 * 		if supplied only those repositories, folders and entries will be shown that match the predicate
+	 */
+	public RepositoryTree(Dialog owner, boolean onlyFolders, boolean onlyWritableRepositories, boolean installDraghandler,
+						  final Color backgroundColor, Predicate<Entry> predicate) {
+		super(new RepositoryTreeModel(RepositoryManager.getInstance(null), onlyFolders, onlyWritableRepositories, predicate));
+		this.owner = owner;
+		getModel().setParentTree(this);
 		// these actions are a) needed for the action map or b) needed by other classes for toolbars
 		// etc
 		listToEnable.add(DELETE_ACTION);
@@ -850,7 +891,6 @@ public class RepositoryTree extends JTree {
 		DELETE_ACTION.addToActionMap(this, "delete", WHEN_FOCUSED);
 		REFRESH_ACTION.addToActionMap(this, WHEN_FOCUSED);
 
-		setLargeModel(true);
 		setRowHeight(Math.max(TREE_ROW_HEIGHT, getRowHeight()));
 		setRootVisible(false);
 		setShowsRootHandles(true);
@@ -866,26 +906,22 @@ public class RepositoryTree extends JTree {
 				@Override
 				public Color getBackground() {
 					return backgroundColor;
-				};
+				}
 
 				@Override
 				public Color getBackgroundNonSelectionColor() {
 					return backgroundColor;
-				};
+				}
 			});
 		} else {
 			setCellRenderer(new RepositoryTreeCellRenderer());
 		}
 		getSelectionModel().setSelectionMode(TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION);
 
-		addTreeSelectionListener(new TreeSelectionListener() {
-
-			@Override
-			public void valueChanged(TreeSelectionEvent e) {
-				if (e.getSource() instanceof JTree) {
-					JTree jtree = (JTree) e.getSource();
-					jtree.repaint();
-				}
+		addTreeSelectionListener(e -> {
+			if (e.getSource() instanceof JTree) {
+				JTree jtree = (JTree) e.getSource();
+				jtree.repaint();
 			}
 		});
 
@@ -899,10 +935,9 @@ public class RepositoryTree extends JTree {
 				if (getSelectionCount() == 1) {
 					if (e.getClickCount() == 2) {
 						TreePath path = getSelectionPath();
-						if (path == null) {
-							return;
+						if (path != null && path.getLastPathComponent() instanceof Entry) {
+							fireLocationSelected((Entry) path.getLastPathComponent());
 						}
-						fireLocationSelected((Entry) path.getLastPathComponent());
 					}
 				}
 			}
@@ -1007,13 +1042,7 @@ public class RepositoryTree extends JTree {
 			setTransferHandler(new RepositoryTreeTransferhandler());
 		}
 
-		getSelectionModel().addTreeSelectionListener(new TreeSelectionListener() {
-
-			@Override
-			public void valueChanged(TreeSelectionEvent e) {
-				enableActions();
-			}
-		});
+		getSelectionModel().addTreeSelectionListener(e -> enableActions());
 
 		addTreeExpansionListener(new TreeExpansionListener() {
 
@@ -1036,35 +1065,35 @@ public class RepositoryTree extends JTree {
 
 			@Override
 			public String getTip(Object o) {
-				if (o instanceof Entry) {
-					return ToolTipProviderHelper.getTip((Entry) o);
-				} else {
-					return null;
-				}
+				return (o instanceof Entry) ? ToolTipProviderHelper.getTip((Entry) o) : null;
 			}
 
 			@Override
 			public Object getIdUnder(Point point) {
 				TreePath path = getPathForLocation((int) point.getX(), (int) point.getY());
-				if (path != null) {
-					return path.getLastPathComponent();
-				} else {
-					return null;
-				}
+				return path == null ? null : path.getLastPathComponent();
 			}
 
 			@Override
 			public Component getCustomComponent(Object o) {
-				if (o instanceof Entry) {
-					return ToolTipProviderHelper.getCustomComponent((Entry) o);
-				} else {
-					return null;
-				}
+				return (o instanceof Entry) ? ToolTipProviderHelper.getCustomComponent((Entry) o) : null;
 			}
 		}, this, TooltipLocation.RIGHT);
 
 		if (backgroundColor != null) {
 			setBackground(backgroundColor);
+		}
+	}
+
+	@Override
+	public RepositoryTreeModel getModel() {
+		return (RepositoryTreeModel) super.getModel();
+	}
+
+	@Override
+	public void setModel(TreeModel treeModel) {
+		if (treeModel instanceof RepositoryTreeModel) {
+			super.setModel(treeModel);
 		}
 	}
 
@@ -1099,11 +1128,8 @@ public class RepositoryTree extends JTree {
 	}
 
 	private void fireLocationSelected(Entry entry) {
-		RepositorySelectionEvent event = null;
+		RepositorySelectionEvent event = new RepositorySelectionEvent(entry);
 		for (RepositorySelectionListener l : listenerList.getListeners(RepositorySelectionListener.class)) {
-			if (event == null) {
-				event = new RepositorySelectionEvent(entry);
-			}
 			l.repositoryLocationSelected(event);
 		}
 	}
@@ -1122,16 +1148,17 @@ public class RepositoryTree extends JTree {
 
 		// set y and height in a way that the path always appears in the center
 		Rectangle bounds = getPathBounds(path);
-		if (bounds != null) {
-			Rectangle visibleRect = getVisibleRect();
-			// try to stay as far left as possible. If very deep folder structure, let Swing decide where to start
-			if ((bounds.x + 50) < visibleRect.x + visibleRect.width) {
-				bounds.x = 0;
-			}
-			bounds.y = bounds.y - visibleRect.height / 2;
-			bounds.height = visibleRect.height;
-			scrollRectToVisible(bounds);
+		if (bounds == null) {
+			return;
 		}
+		Rectangle visibleRect = getVisibleRect();
+		// try to stay as far left as possible. If very deep folder structure, let Swing decide where to start
+		if ((bounds.x + 50) < visibleRect.x + visibleRect.width) {
+			bounds.x = 0;
+		}
+		bounds.y = bounds.y - visibleRect.height / 2;
+		bounds.height = visibleRect.height;
+		scrollRectToVisible(bounds);
 	}
 
 	/**
@@ -1175,8 +1202,10 @@ public class RepositoryTree extends JTree {
 			full = false;
 		}
 		if (entry != null) {
-			RepositoryTreeModel model = (RepositoryTreeModel) getModel();
-			TreePath pathTo = model.getPathTo(entry);
+			if (relativeTo != null) {
+				RepositoryManager.getInstance(null).unhide(relativeTo.getRepositoryName());
+			}
+			TreePath pathTo = getModel().getPathTo(entry);
 			expandPath(pathTo);
 			setSelectionPath(pathTo);
 			if (entry instanceof Folder) {
@@ -1201,21 +1230,14 @@ public class RepositoryTree extends JTree {
 
 	private void showPopup(MouseEvent e) {
 
-		TreePath[] paths = getSelectionPaths();
+		List<Entry> entries = getSelectedEntries();
 		JPopupMenu menu = new JPopupMenu();
 
-		if (paths == null || paths.length < 1) {
+		if (entries.isEmpty()) {
 			return;
-		} else if (paths.length == 1) {
-			// Exactly one item selected
-			Object component = paths[0].getLastPathComponent();
-
+		} else if (entries.size() == 1) {
 			// Add actions
-			List<Entry> entryList = new ArrayList<>(1);
-			if (component instanceof Entry) {
-				entryList.add((Entry) component);
-			}
-			List<Action> actionList = createContextMenuActions(this, entryList);
+			List<Action> actionList = createContextMenuActions(this, entries);
 			// Go through ordered list of actions and add them
 			for (Action action : actionList) {
 				if (action == null) {
@@ -1226,13 +1248,11 @@ public class RepositoryTree extends JTree {
 			}
 
 			// Append custom actions if there are any
-			if (component instanceof Entry) {
-				Collection<Action> customActions = ((Entry) component).getCustomActions();
-				if (customActions != null && !customActions.isEmpty()) {
-					menu.addSeparator();
-					for (Action customAction : customActions) {
-						menu.add(customAction);
-					}
+			Collection<Action> customActions = entries.get(0).getCustomActions();
+			if (customActions != null && !customActions.isEmpty()) {
+				menu.addSeparator();
+				for (Action customAction : customActions) {
+					menu.add(customAction);
 				}
 			}
 
@@ -1240,22 +1260,12 @@ public class RepositoryTree extends JTree {
 			// Multiple items selected
 
 			// Get all selected entries
-			List<Entry> selectedEntries = new LinkedList<>();
-			for (TreePath path : paths) {
-				Object component = path.getLastPathComponent();
-				if (component instanceof Entry) {
-					selectedEntries.add((Entry) component);
-				}
-			}
+			List<Entry> selectedEntries = getSelectedEntries();
 
 			// Get possible actions of selected entries
-			List<RepositoryActionEntry> evaluatedActions = new LinkedList<>(REPOSITORY_MULTIPLE_ENTRIES_ACTIONS);
-			for (int i = 0; i < REPOSITORY_MULTIPLE_ENTRIES_ACTIONS.size(); i++) {
-				RepositoryActionEntry actionEntry = REPOSITORY_MULTIPLE_ENTRIES_ACTIONS.get(i);
-				if (!actionEntry.getRepositoryActionCondition().evaluateCondition(selectedEntries)) {
-					evaluatedActions.remove(actionEntry);
-				}
-			}
+			List<RepositoryActionEntry> evaluatedActions = REPOSITORY_MULTIPLE_ENTRIES_ACTIONS.stream()
+					.filter(actionEntry -> actionEntry.getRepositoryActionCondition().evaluateCondition(selectedEntries))
+			        .collect(Collectors.toList());
 
 			// Add actions
 			boolean lastWasSeparator = true;
@@ -1263,7 +1273,7 @@ public class RepositoryTree extends JTree {
 
 				try {
 					Constructor<? extends AbstractRepositoryAction<?>> constructor = actionEntry.getRepositoryActionClass()
-							.getConstructor(new Class[] { RepositoryTree.class });
+							.getConstructor(RepositoryTree.class);
 					AbstractRepositoryAction<?> createdAction = constructor.newInstance(this);
 					createdAction.enable();
 
@@ -1273,11 +1283,8 @@ public class RepositoryTree extends JTree {
 					menu.add(createdAction);
 					if (actionEntry.hasSeparatorAfter) {
 						menu.addSeparator();
-						lastWasSeparator = true;
-					} else {
-						lastWasSeparator = false;
 					}
-
+					lastWasSeparator = actionEntry.hasSeparatorAfter;
 				} catch (Exception ex) {
 					LogService.getRoot().log(Level.SEVERE,
 							"com.rapidminer.repository.gui.RepositoryTree.creating_repository_action_error",
@@ -1330,7 +1337,7 @@ public class RepositoryTree extends JTree {
 	 * Gets list of selected entries of this tree
 	 */
 	public List<Entry> getSelectedEntries() {
-		List<Entry> selectedEntries = new LinkedList<>();
+		List<Entry> selectedEntries = new ArrayList<>();
 		TreePath[] paths = getSelectionPaths();
 		if (paths != null) {
 			for (TreePath treePath : paths) {
@@ -1344,8 +1351,8 @@ public class RepositoryTree extends JTree {
 	}
 
 	public Collection<AbstractRepositoryAction<?>> getAllActions() {
-		List<AbstractRepositoryAction<?>> listOfAbstractRepositoryActions = new LinkedList<>();
-		for (Action action : createContextMenuActions(this, new LinkedList<Entry>())) {
+		List<AbstractRepositoryAction<?>> listOfAbstractRepositoryActions = new ArrayList<>();
+		for (Action action : createContextMenuActions(this, new ArrayList<>())) {
 			if (action instanceof AbstractRepositoryAction<?>) {
 				listOfAbstractRepositoryActions.add((AbstractRepositoryAction<?>) action);
 			}
@@ -1369,7 +1376,6 @@ public class RepositoryTree extends JTree {
 	 *            if true, a separator will be added before the action
 	 * @param hasSeparatorAfter
 	 *            if true, a separator will be added after the action
-	 * @return true if the action was successfully added; false otherwise
 	 */
 	public static void addRepositoryAction(Class<? extends AbstractRepositoryAction<?>> actionClass,
 			RepositoryActionCondition condition, boolean hasSeparatorBefore, boolean hasSeparatorAfter) {
@@ -1396,7 +1402,6 @@ public class RepositoryTree extends JTree {
 	 *            if true, a separator will be added before the action
 	 * @param hasSeparatorAfter
 	 *            if true, a separator will be added after the action
-	 * @return true if the action was successfully added; false otherwise
 	 */
 	public static void addRepositoryAction(Class<? extends AbstractRepositoryAction<?>> actionClass,
 			RepositoryActionCondition condition, Class<? extends Action> insertAfterThisAction, boolean hasSeparatorBefore,
@@ -1410,23 +1415,12 @@ public class RepositoryTree extends JTree {
 		if (insertAfterThisAction == null) {
 			REPOSITORY_ACTIONS.add(newEntry);
 		} else {
-			// searching for class to insert after
-			boolean inserted = false;
-			int i = 0;
-			for (RepositoryActionEntry entry : REPOSITORY_ACTIONS) {
-				Class<? extends Action> existingAction = entry.getRepositoryActionClass();
-				if (existingAction.equals(insertAfterThisAction)) {
-					REPOSITORY_ACTIONS.add(i + 1, newEntry);
-					inserted = true;
-					break;
-				}
-				i++;
-			}
-
-			// if reference couldn't be found: just add as last
-			if (!inserted) {
-				REPOSITORY_ACTIONS.add(newEntry);
-			}
+			// searching for pos to insert after
+			int insertPos = 1 + REPOSITORY_ACTIONS.stream()
+					.filter(e -> insertAfterThisAction.equals(e.getRepositoryActionClass()))
+					.findFirst().map(REPOSITORY_ACTIONS::indexOf)
+					.orElse(REPOSITORY_ACTIONS.size() - 1);
+			REPOSITORY_ACTIONS.add(insertPos, newEntry);
 		}
 
 		// add action instances for multiple entires
@@ -1442,13 +1436,7 @@ public class RepositoryTree extends JTree {
 	 *            the class of the {@link AbstractRepositoryAction} to remove
 	 */
 	public static void removeRepositoryAction(Class<? extends AbstractRepositoryAction<?>> actionClass) {
-		Iterator<RepositoryActionEntry> iterator = REPOSITORY_ACTIONS.iterator();
-
-		while (iterator.hasNext()) {
-			if (iterator.next().getRepositoryActionClass().equals(actionClass)) {
-				iterator.remove();
-			}
-		}
+		REPOSITORY_ACTIONS.removeIf(repositoryActionEntry -> repositoryActionEntry.getRepositoryActionClass().equals(actionClass));
 	}
 
 	/**
@@ -1460,7 +1448,7 @@ public class RepositoryTree extends JTree {
 	 * add actions.
 	 */
 	private static List<Action> createContextMenuActions(RepositoryTree repositoryTree, List<Entry> entryList) {
-		List<Action> listOfActions = new LinkedList<>();
+		List<Action> listOfActions = new ArrayList<>();
 		boolean lastWasSeparator = true;
 
 		for (RepositoryActionEntry actionEntry : REPOSITORY_ACTIONS) {
@@ -1471,16 +1459,14 @@ public class RepositoryTree extends JTree {
 						listOfActions.add(null);
 					}
 					Constructor<? extends AbstractRepositoryAction<?>> constructor = actionEntry.getRepositoryActionClass()
-							.getConstructor(new Class[] { RepositoryTree.class });
+							.getConstructor(RepositoryTree.class);
 					AbstractRepositoryAction<?> createdAction = constructor.newInstance(repositoryTree);
 					createdAction.enable();
 					listOfActions.add(createdAction);
 					if (actionEntry.hasSeperatorAfter()) {
 						listOfActions.add(null);
-						lastWasSeparator = true;
-					} else {
-						lastWasSeparator = false;
 					}
+					lastWasSeparator = actionEntry.hasSeperatorAfter();
 				}
 			} catch (Exception e) {
 				LogService.getRoot().log(Level.SEVERE,
@@ -1499,24 +1485,17 @@ public class RepositoryTree extends JTree {
 	 * @since 7.4
 	 */
 	public void setSortingMethod(RepositorySortingMethod method) {
-		if (getModel() instanceof RepositoryTreeModel) {
-			// Remember expansion state before setting new RepositorySortingMethod
-			Enumeration<TreePath> expandedDescendants = getExpandedDescendants(new TreePath(treeModel.getRoot()));
-			List<TreePath> oldExpanded = new ArrayList<>();
-			if (expandedDescendants != null) {
-				while (expandedDescendants.hasMoreElements()) {
-					oldExpanded.add(expandedDescendants.nextElement());
-				}
-			}
+		// Remember expansion state before setting new RepositorySortingMethod
+		Enumeration<TreePath> expandedDescendants = getExpandedDescendants(new TreePath(getModel().getRoot()));
+		expandedDescendants = expandedDescendants == null ? Collections.emptyEnumeration() : expandedDescendants;
 
-			((RepositoryTreeModel) getModel()).setSortingMethod(method);
+		getModel().setSortingMethod(method);
 
-			for (TreePath oldEx : oldExpanded) {
-				setExpandedState(oldEx, true);
-			}
-			for (RepositorySortingMethodListener l : listenerList.getListeners(RepositorySortingMethodListener.class)) {
-				l.changedRepositorySortingMethod(method);
-			}
+		while (expandedDescendants.hasMoreElements()) {
+			setExpandedState(expandedDescendants.nextElement(), true);
+		}
+		for (RepositorySortingMethodListener l : listenerList.getListeners(RepositorySortingMethodListener.class)) {
+			l.changedRepositorySortingMethod(method);
 		}
 	}
 
@@ -1527,10 +1506,7 @@ public class RepositoryTree extends JTree {
 	 * @since 7.4
 	 */
 	public RepositorySortingMethod getSortingMethod() {
-		if (getModel() instanceof RepositoryTreeModel) {
-			return ((RepositoryTreeModel) getModel()).getSortingMethod();
-		}
-		return null;
+		return getModel().getSortingMethod();
 	}
 
 }

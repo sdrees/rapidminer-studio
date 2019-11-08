@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -20,10 +20,10 @@ package com.rapidminer.parameter;
 
 import java.io.Serializable;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.logging.Level;
 
 import org.w3c.dom.Document;
@@ -90,6 +90,11 @@ public abstract class ParameterType implements Comparable<ParameterType>, Serial
 	 * always viewable. The default value is true.
 	 */
 	private boolean expert = true;
+
+	/**
+	 * Indicates if a parameter is a primary parameter of an operator, i.e. one that gets activated with a double-click.
+	 */
+	private boolean primary = false;
 
 	/**
 	 * Indicates if this parameter is hidden and is not shown in the GUI. May be used in conjunction
@@ -211,11 +216,7 @@ public abstract class ParameterType implements Comparable<ParameterType>, Serial
 	 * invocations, because it relies on getting the Parameters object, which is then not created.
 	 */
 	public boolean isHidden() {
-		boolean conditionsMet = true;
-		for (ParameterCondition condition : conditions) {
-			conditionsMet &= condition.dependencyMet();
-		}
-		return isDeprecated || isHidden || !conditionsMet;
+		return isHidden || isDeprecated || !conditions.stream().allMatch(ParameterCondition::dependencyMet);
 	}
 
 	public Collection<ParameterCondition> getConditions() {
@@ -329,11 +330,56 @@ public abstract class ParameterType implements Comparable<ParameterType>, Serial
 	}
 
 	/**
-	 * This method gives a hook for the parameter type to react on a renaming of an operator. It
-	 * must return the correctly modified String value. The default implementation does nothing.
+	 * Sets if this parameter type is a primary parameter of an operator, i.e. one that can be opened with a double-click. If not set, defaults to {@code false}, except for {@link ParameterTypeConfiguration}.
+	 * If more than one parameter type of an operator is set to primary, the first one returned in the parameters collection will be considered the primary one.
+	 *
+	 * @param primary
+	 * 		{@code true} if it is a primary parameter; {@code false} otherwise
+	 * @since 8.2
+	 */
+	public void setPrimary(final boolean primary) {
+		this.primary = primary;
+	}
+
+	/**
+	 * Returns if this is a primary parameter of an operator, i.e. one that can be opened with a double-click. Defaults to {@code false}.
+	 *
+	 * @return {@code true} if it is a primary parameter; {@code false} otherwise
+	 * @since 8.2
+	 */
+	public boolean isPrimary() {
+		return primary;
+	}
+
+	/**
+	 * This method gives a hook for the parameter type to react to the renaming of an operator. It
+	 * must return the correctly modified parameter value as string.
+	 *
+	 * @return the unmodified <em>parameterValue</em> by default
 	 */
 	public String notifyOperatorRenaming(String oldOperatorName, String newOperatorName, String parameterValue) {
 		return parameterValue;
+	}
+
+	/**
+	 * This method gives a hook for the parameter type to react to the replacing of an operator. It
+	 * must return the correctly modified parameter value as string.
+	 *
+	 * @param oldName
+	 * 		the name of the old operator; must not be {@code null}
+	 * @param oldOp
+	 * 		the old operator; can be {@code null}
+	 * @param newName
+	 * 		the name of the new operator; must not be {@code null}
+	 * @param newOp
+	 * 		the new operator; must not be {@code null}
+	 * @param parameterValue
+	 * 		the original parameter value
+	 * @return the same as {@link #notifyOperatorRenaming(String, String, String) notifyOperatorRenaming} by default
+	 * @since 9.3
+	 */
+	public String notifyOperatorReplacing(String oldName, Operator oldOp, String newName, Operator newOp, String parameterValue) {
+		return notifyOperatorRenaming(oldName, newName, parameterValue);
 	}
 
 	/** Returns a string representation of this value. */
@@ -465,19 +511,11 @@ public abstract class ParameterType implements Comparable<ParameterType>, Serial
 				Constructor<?> constructor = conditionClass.getConstructor(Element.class);
 				conditions.add((ParameterCondition) constructor.newInstance(conditionElement));
 			}
-		} catch (ClassNotFoundException e) {
+		} catch (SecurityException | IllegalArgumentException e) {
 			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (IllegalArgumentException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (InstantiationException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (IllegalAccessException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (InvocationTargetException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (SecurityException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
-		} catch (NoSuchMethodException e) {
+		} catch (XMLException | RuntimeException e) {
+			throw e;
+		} catch (Exception e) {
 			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CONDITION_CLASS, e);
 		}
 	}
@@ -494,21 +532,11 @@ public abstract class ParameterType implements Comparable<ParameterType>, Serial
 			Constructor<?> constructor = typeClass.getConstructor(Element.class);
 			Object type = constructor.newInstance(element);
 			return (ParameterType) type;
-		} catch (ClassNotFoundException e) {
+		} catch (SecurityException | IllegalArgumentException e) {
 			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (SecurityException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (NoSuchMethodException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (IllegalArgumentException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (InstantiationException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (IllegalAccessException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (InvocationTargetException e) {
-			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
-		} catch (ClassCastException e) {
+		} catch (RuntimeException e) {
+			throw e;
+		} catch (Exception e) {
 			throw new XMLException("Illegal value for attribute " + ATTRIBUTE_CLASS, e);
 		}
 	}

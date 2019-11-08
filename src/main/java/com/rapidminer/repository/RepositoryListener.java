@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -19,6 +19,8 @@
 package com.rapidminer.repository;
 
 import java.util.EventListener;
+
+import com.rapidminer.repository.internal.remote.RemoteRepository;
 
 
 /**
@@ -96,5 +98,14 @@ public interface RepositoryListener extends EventListener {
 	 * 		the folder that has been refreshed.
 	 */
 	void folderRefreshed(Folder folder);
+
+	/**
+	 * Fired when a {@link RemoteRepository} has been disconnected. Does nothing by default.
+	 *
+	 * @param repository
+	 * 		the repository that ahs been disconnected
+	 * @since 8.2.1
+	 */
+	default void repositoryDisconnected(RemoteRepository repository){}
 
 }

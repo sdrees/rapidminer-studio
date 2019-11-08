@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -107,7 +107,7 @@ public abstract class RMAbstractClusterer extends AbstractClusterer implements C
 		try {
 			Tools.onlyFiniteValues(exampleSet, this.getOperatorClassName(), this, new String[0]);
 		} catch (UserError ue) {
-			boolean isInfinite = ue.getCode() == -1 && ue.getErrorIdentifier().equals("infinite_values");
+			boolean isInfinite = Tools.INFINITE_VALUES.equals(ue.getErrorIdentifier());
 			if (isInfinite) {
 				this.addError(new SimpleProcessSetupError(handlesInfiniteValues() ? Severity.WARNING : Severity.ERROR,
 						getPortOwner(), "exampleset.contains_infinite_values", getOperatorClassName()));

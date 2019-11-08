@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -21,6 +21,7 @@ package com.rapidminer.repository;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
+import com.rapidminer.connection.ConnectionInformation;
 import com.rapidminer.repository.gui.RepositoryConfigurationPanel;
 
 
@@ -29,39 +30,53 @@ import com.rapidminer.repository.gui.RepositoryConfigurationPanel;
  */
 public interface Repository extends Folder {
 
-	public void addRepositoryListener(RepositoryListener l);
+	void addRepositoryListener(RepositoryListener l);
 
-	public void removeRepositoryListener(RepositoryListener l);
+	void removeRepositoryListener(RepositoryListener l);
 
 	/**
 	 * This will return the entry if existing or null if it can't be found.
 	 */
-	public Entry locate(String string) throws RepositoryException;
+	Entry locate(String string) throws RepositoryException;
 
 	/** Returns some user readable information about the state of this repository. */
-	public String getState();
+	String getState();
 
 	/** Returns the icon name for the repository. */
-	public String getIconName();
+	String getIconName();
 
 	/** Returns a piece of XML to store the repository in a configuration file. */
-	public Element createXML(Document doc);
+	Element createXML(Document doc);
 
-	public abstract boolean shouldSave();
+	boolean shouldSave();
 
 	/**
 	 * Called after the repository is added.
 	 */
-	public void postInstall();
+	void postInstall();
 
 	/**
 	 * Called directly before the repository is removed.
 	 */
-	public void preRemove();
+	void preRemove();
 
 	/** Returns true if the repository is configurable. In that case, */
-	public boolean isConfigurable();
+	boolean isConfigurable();
+
+	/**
+	 * Returns whether this repository can successfully handle the {@link com.rapidminer.connection.ConnectionInformation
+	 * ConnectionInformation} objects introduced with RapidMiner Studio 9.3.
+	 *
+	 * @return {@code true} if this repository supports connections; {@code false} otherwise. By default, returns {@code
+	 * false}
+	 * @see Folder#createConnectionEntry(String, ConnectionInformation)
+	 * @since 9.3.0
+	 */
+	default boolean supportsConnections() {
+		return false;
+	}
 
 	/** Creates a configuration panel. */
-	public RepositoryConfigurationPanel makeConfigurationPanel();
+	RepositoryConfigurationPanel makeConfigurationPanel();
+
 }

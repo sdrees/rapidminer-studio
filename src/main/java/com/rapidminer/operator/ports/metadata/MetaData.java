@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -18,14 +18,6 @@
 */
 package com.rapidminer.operator.ports.metadata;
 
-import com.rapidminer.gui.renderer.RendererService;
-import com.rapidminer.operator.Annotations;
-import com.rapidminer.operator.IOObject;
-import com.rapidminer.operator.ProcessSetupError.Severity;
-import com.rapidminer.operator.ports.InputPort;
-import com.rapidminer.operator.ports.OutputPort;
-import com.rapidminer.tools.RMUrlHandler;
-
 import java.io.IOException;
 import java.io.ObjectStreamException;
 import java.io.Serializable;
@@ -35,6 +27,15 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+
+import com.rapidminer.adaption.belt.AtPortConverter;
+import com.rapidminer.gui.renderer.RendererService;
+import com.rapidminer.operator.Annotations;
+import com.rapidminer.operator.IOObject;
+import com.rapidminer.operator.ProcessSetupError.Severity;
+import com.rapidminer.operator.ports.InputPort;
+import com.rapidminer.operator.ports.OutputPort;
+import com.rapidminer.tools.RMUrlHandler;
 
 
 /**
@@ -165,7 +166,7 @@ public class MetaData implements Serializable {
 	}
 
 	public String getDescription() {
-		String name = RendererService.getName(dataClass);
+		String name = getTitleForDescription();
 		if (name == null) {
 			name = dataClass.getSimpleName();
 		}
@@ -182,6 +183,17 @@ public class MetaData implements Serializable {
 			desc.append("</ul>");
 		}
 		return desc.toString();
+	}
+
+	/**
+	 * Returns the title that is used in the {@link #getDescription()} method
+	 * <p>The default implementation checks {@link RendererService#getName}</p>
+	 * <p>If this method returns {@code null}, the {@link Class#getSimpleName()} of the data class is used.</p>
+	 *
+	 * @return the description title, might contain html
+	 */
+	protected String getTitleForDescription() {
+		return RendererService.getName(dataClass);
 	}
 
 	/**
@@ -202,7 +214,8 @@ public class MetaData implements Serializable {
 	 *            the data received by the port
 	 */
 	public Collection<MetaDataError> getErrorsForInput(InputPort inputPort, MetaData isData, CompatibilityLevel level) {
-		if (!this.dataClass.isAssignableFrom(isData.dataClass)) {
+		if (!this.dataClass.isAssignableFrom(isData.dataClass) &&
+				!AtPortConverter.isConvertible(this.dataClass, isData.dataClass)) {
 			return Collections.<MetaDataError> singletonList(new InputMissingMetaDataError(inputPort, this.getObjectClass(),
 					isData.getObjectClass()));
 		}
@@ -238,5 +251,23 @@ public class MetaData implements Serializable {
 
 	public void setAnnotations(Annotations annotations) {
 		this.annotations = annotations;
+	}
+
+	/**
+	 * Shrinks the values of the meta data, if possible. For now, this is only done for number of nominal values in
+	 * {@link ExampleSetMetaData}.
+	 *
+	 * @param metaData
+	 * 		the meta data to try to shrink
+	 * @since 9.3.2
+	 */
+	public static void shrinkValues(MetaData metaData) {
+		if (metaData instanceof ExampleSetMetaData) {
+			for (AttributeMetaData amd : ((ExampleSetMetaData) metaData).getAllAttributes()) {
+				if (amd.isNominal()) {
+					amd.shrinkValueSet();
+				}
+			}
+		}
 	}
 }

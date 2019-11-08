@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -32,7 +32,6 @@ import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.awt.event.ComponentEvent;
 import java.awt.event.ComponentListener;
 import java.awt.event.KeyEvent;
@@ -386,6 +385,8 @@ public class ButtonDialog extends JDialog {
 	private static final Dimension DIMENSION_TALL = new Dimension(520, 770);
 
 	public static final int GAP = 6;
+
+	public static final String WINDOW_CLOSING_EVENT_STRING = "WINDOW_CLOSING";
 
 	protected static final Insets INSETS = new Insets(GAP, GAP, GAP, GAP);
 
@@ -741,14 +742,8 @@ public class ButtonDialog extends JDialog {
 		for (final AbstractButton button : buttons) {
 			if (button != null) {
 				buttonPanel.add(button);
-				button.addActionListener(new ActionListener() {
-
-					@Override
-					public void actionPerformed(ActionEvent e) {
-						ActionStatisticsCollector.getInstance().log(ActionStatisticsCollector.TYPE_DIALOG, key,
-								button.getActionCommand());
-					}
-				});
+				button.addActionListener(
+						e -> ActionStatisticsCollector.getInstance().log(ActionStatisticsCollector.TYPE_DIALOG, key, button.getActionCommand()));
 			}
 		}
 		return buttonPanel;

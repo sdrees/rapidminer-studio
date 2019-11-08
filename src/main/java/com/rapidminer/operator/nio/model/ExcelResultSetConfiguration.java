@@ -1,31 +1,33 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
- * 
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
+ *
  * Complete list of developers available at our web site:
- * 
+ *
  * http://rapidminer.com
- * 
+ *
  * This program is free software: you can redistribute it and/or modify it under the terms of the
  * GNU Affero General Public License as published by the Free Software Foundation, either version 3
  * of the License, or (at your option) any later version.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
  * even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * Affero General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Affero General Public License along with this program.
  * If not, see http://www.gnu.org/licenses/.
-*/
+ */
 package com.rapidminer.operator.nio.model;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.zip.ZipFile;
-
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.TableModel;
 import javax.xml.parsers.ParserConfigurationException;
@@ -44,6 +46,7 @@ import com.rapidminer.operator.nio.model.xlsx.XlsxSheetTableModel;
 import com.rapidminer.operator.nio.model.xlsx.XlsxWorkbookParser;
 import com.rapidminer.operator.nio.model.xlsx.XlsxWorkbookParser.XlsxWorkbook;
 import com.rapidminer.operator.ports.metadata.ExampleSetMetaData;
+import com.rapidminer.parameter.ParameterTypeDateFormat;
 import com.rapidminer.parameter.UndefinedParameterError;
 import com.rapidminer.tools.ProgressListener;
 import com.rapidminer.tools.Tools;
@@ -60,6 +63,16 @@ import jxl.read.biff.BiffException;
  * @author Sebastian Land, Marco Boeck, Nils Woehler
  */
 public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelSheetSelection {
+
+	public static final String EXCEL_FILE_LOCATION = "excel.fileLocation";
+	public static final String EXCEL_SHEET_SELECTION_MODE = "excel.sheetSelectionMode";
+	public static final String EXCEL_SHEET_NAME = "excel.sheetName";
+	public static final String EXCEL_SHEET = "excel.sheet";
+	public static final String EXCEL_ROW_OFFSET = "excel.rowOffset";
+	public static final String EXCEL_ROW_LAST = "excel.rowLast";
+	public static final String EXCEL_COLUMN_OFFSET = "excel.columnOffset";
+	public static final String EXCEL_COLUMN_LAST = "excel.columnLast";
+	public static final String EXCEL_HEADER_ROW_INDEX = "excel.headerRowIndex";
 
 	private static final String XLS_FILE_ENDING = ".xls";
 	private static final String XLSX_FILE_ENDING = ".xlsx";
@@ -111,7 +124,7 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 			} catch (UndefinedParameterError e) {
 				excelParamter = null;
 			}
-			if (excelParamter != null && !"".equals(excelParamter)) {
+			if (excelParamter != null && !excelParamter.isEmpty()) {
 				File excelFile = new File(excelParamter);
 				if (excelFile.exists()) {
 					this.workbookFile = excelFile;
@@ -119,8 +132,8 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 			}
 		}
 
-		if (excelExampleSource.isParameterSet(AbstractDataResultSetReader.PARAMETER_DATE_FORMAT)) {
-			datePattern = excelExampleSource.getParameterAsString(AbstractDataResultSetReader.PARAMETER_DATE_FORMAT);
+		if (excelExampleSource.isParameterSet(ParameterTypeDateFormat.PARAMETER_DATE_FORMAT)) {
+			datePattern = excelExampleSource.getParameterAsString(ParameterTypeDateFormat.PARAMETER_DATE_FORMAT);
 		}
 
 		if (excelExampleSource.isParameterSet(AbstractDataResultSetReader.PARAMETER_TIME_ZONE)) {
@@ -198,18 +211,15 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 */
 	public AbstractTableModel createExcelTableModel(ExcelSheetSelection sheetSelection, XlsxReadMode readMode, ProgressListener progressListener)
 			throws BiffException, IOException, InvalidFormatException, OperatorException, ParseException {
-		if (getFile().getAbsolutePath().endsWith(XLSX_FILE_ENDING)) {
+		if (getFile().getAbsolutePath().toLowerCase(Locale.ENGLISH).endsWith(XLSX_FILE_ENDING)) {
 			// excel 2007 file
 			return new XlsxSheetTableModel(this, sheetSelection, readMode, getFile().getAbsolutePath(), progressListener);
 		} else {
 			// excel pre 2007 file
-			if (workbookJXL == null) {
-				createWorkbookJXL();
-			}
 			progressListener.setCompleted(50);
 
 			try {
-				return new ExcelSheetTableModel(sheetSelection.selectSheetFrom(workbookJXL));
+				return new ExcelSheetTableModel(sheetSelection.selectSheetFrom(getOrCreateWorkbookJXL()));
 			} catch (ExcelSheetSelection.SheetNotFoundException e) {
 				throw new IOException(e);
 			}
@@ -225,26 +235,17 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 * @throws InvalidFormatException
 	 */
 	public int getNumberOfSheets() throws BiffException, IOException, InvalidFormatException, UserError {
-		if (getFile().getAbsolutePath().endsWith(XLSX_FILE_ENDING)) {
+		if (getFile().getAbsolutePath().toLowerCase(Locale.ENGLISH).endsWith(XLSX_FILE_ENDING)) {
 			// excel 2007 file
 			try (ZipFile zipFile = new ZipFile(getFile().getAbsolutePath())) {
-				try {
-					return getNumberOfSheets(parseWorkbook(zipFile));
-				} catch (ParserConfigurationException | SAXException e) {
-					throw new UserError(null, e, "xlsx_content_malformed");
-				}
+				return parseWorkbook(zipFile).xlsxWorkbookSheets.size();
+			} catch (ParserConfigurationException | SAXException e) {
+				throw new UserError(null, e, "xlsx_content_malformed");
 			}
 		} else {
 			// excel pre 2007 file
-			if (workbookJXL == null) {
-				createWorkbookJXL();
-			}
-			return workbookJXL.getNumberOfSheets();
+			return getOrCreateWorkbookJXL().getNumberOfSheets();
 		}
-	}
-
-	private int getNumberOfSheets(XlsxWorkbook workbook) {
-		return workbook.xlsxWorkbookSheets.size();
 	}
 
 	private XlsxWorkbook parseWorkbook(ZipFile zipFile)
@@ -261,28 +262,16 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 * @throws InvalidFormatException
 	 */
 	public String[] getSheetNames() throws BiffException, IOException, InvalidFormatException, UserError {
-		if (getFile().getAbsolutePath().endsWith(XLSX_FILE_ENDING)) {
+		if (getFile().getAbsolutePath().toLowerCase(Locale.ENGLISH).endsWith(XLSX_FILE_ENDING)) {
 			// excel 2007 file
 			try (ZipFile zipFile = new ZipFile(getFile().getAbsolutePath())) {
-				XlsxWorkbook workbook;
-				try {
-					workbook = parseWorkbook(zipFile);
-					String[] sheetNames = new String[getNumberOfSheets(workbook)];
-					for (int i = 0; i < getNumberOfSheets(); i++) {
-						sheetNames[i] = workbook.xlsxWorkbookSheets.get(i).name;
-					}
-					return sheetNames;
-				} catch (ParserConfigurationException | SAXException e) {
-					throw new UserError(null, e, "xlsx_content_malformed");
-				}
-
+				return parseWorkbook(zipFile).xlsxWorkbookSheets.stream().map(s -> s.name).toArray(String[]::new);
+			} catch (ParserConfigurationException | SAXException e) {
+				throw new UserError(null, e, "xlsx_content_malformed");
 			}
 		} else {
 			// excel pre 2007 file
-			if (workbookJXL == null) {
-				createWorkbookJXL();
-			}
-			return workbookJXL.getSheetNames();
+			return getOrCreateWorkbookJXL().getSheetNames();
 		}
 	}
 
@@ -292,7 +281,7 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 * @return
 	 */
 	public Charset getEncoding() {
-		return this.encoding;
+		return encoding;
 	}
 
 	/**
@@ -315,13 +304,10 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 * closed if files differ.
 	 */
 	public void setWorkbookFile(File selectedFile) {
-		if (selectedFile.equals(this.workbookFile)) {
+		if (Objects.equals(selectedFile, workbookFile)) {
 			return;
 		}
-		if (workbookJXL != null) {
-			workbookJXL.close();
-			workbookJXL = null;
-		}
+		closeWorkbook();
 		workbookFile = selectedFile;
 		rowOffset = 0;
 		columnOffset = 0;
@@ -432,9 +418,9 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 		}
 		String absolutePath = file.getAbsolutePath();
 		DataResultSet resultSet;
-		if (absolutePath.endsWith(XLSX_FILE_ENDING)) {
+		if (absolutePath.toLowerCase(Locale.ENGLISH).endsWith(XLSX_FILE_ENDING)) {
 			resultSet = createExcel2007ResultSet(operator, readMode, provider);
-		} else if (absolutePath.endsWith(XLS_FILE_ENDING)) {
+		} else if (absolutePath.toLowerCase(Locale.ENGLISH).endsWith(XLS_FILE_ENDING)) {
 			// excel pre 2007 file
 			resultSet = new ExcelResultSet(operator, this, provider);
 		} else {
@@ -504,8 +490,7 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 			throw new UserError(null, 205, ExcelExampleSource.PARAMETER_EXCEL_FILE, "");
 		}
 
-		String absolutePath = file.getAbsolutePath();
-		if (absolutePath.endsWith(XLSX_FILE_ENDING)) {
+		if (file.getAbsolutePath().toLowerCase(Locale.ENGLISH).endsWith(XLSX_FILE_ENDING)) {
 			try {
 				return createExcelTableModel(getSheetSelectionMethod(), XlsxReadMode.WIZARD_PREVIEW, listener);
 			} catch (BiffException | InvalidFormatException | IOException | ParseException e) {
@@ -521,10 +506,8 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	}
 
 	public void closeWorkbook() {
-		if (workbookJXL != null) {
-			workbookJXL.close();
-			workbookJXL = null;
-		}
+		close();
+		workbookJXL = null;
 	}
 
 	@Override
@@ -610,38 +593,23 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 
 	@Override
 	public void close() {
-		if (workbookJXL != null) {
+		if (hasWorkbook()) {
 			workbookJXL.close();
 		}
-	}
-
-	/**
-	 * Creates the JXL workbook.
-	 *
-	 * @throws BiffException
-	 * @throws IOException
-	 */
-	private void createWorkbookJXL() throws BiffException, IOException {
-		File file = getFile();
-		WorkbookSettings workbookSettings = new WorkbookSettings();
-		if (encoding != null) {
-			workbookSettings.setEncoding(encoding.name());
-		}
-		workbookJXL = Workbook.getWorkbook(file, workbookSettings);
 	}
 
 	/**
 	 * @return the timezone
 	 */
 	public String getTimezone() {
-		return this.timezone;
+		return timezone;
 	}
 
 	/**
 	 * @return the datePattern
 	 */
 	public String getDatePattern() {
-		return this.datePattern;
+		return datePattern;
 	}
 
 	/**
@@ -668,15 +636,14 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	 *            the map to store the parameter to
 	 */
 	public void storeConfiguration(Map<String, String> parameters) {
-		File file = getFile();
-		parameters.put("excel.fileLocation", file != null ? file.toString() : "");
-		parameters.put("excel.sheetSelectionMode", String.valueOf(sheetSelectionMode));
-		parameters.put("excel.sheet", String.valueOf(getSheet()));
-		parameters.put("excel.sheetName", String.valueOf(getSheetByName()));
-		parameters.put("excel.rowOffset", String.valueOf(getRowOffset()));
-		parameters.put("excel.rowLast", String.valueOf(getRowLast()));
-		parameters.put("excel.columnOffset", String.valueOf(getColumnOffset()));
-		parameters.put("excel.columnLast", String.valueOf(getColumnLast()));
+		parameters.put(EXCEL_FILE_LOCATION, Objects.toString(getFile(), ""));
+		parameters.put(EXCEL_SHEET_SELECTION_MODE, String.valueOf(sheetSelectionMode));
+		parameters.put(EXCEL_SHEET, String.valueOf(getSheet()));
+		parameters.put(EXCEL_SHEET_NAME, String.valueOf(getSheetByName()));
+		parameters.put(EXCEL_ROW_OFFSET, String.valueOf(getRowOffset()));
+		parameters.put(EXCEL_ROW_LAST, String.valueOf(getRowLast()));
+		parameters.put(EXCEL_COLUMN_OFFSET, String.valueOf(getColumnOffset()));
+		parameters.put(EXCEL_COLUMN_LAST, String.valueOf(getColumnLast()));
 	}
 
 	@Override
@@ -692,6 +659,22 @@ public class ExcelResultSetConfiguration implements DataResultSetFactory, ExcelS
 	@Override
 	public org.apache.poi.ss.usermodel.Sheet selectSheetFrom(org.apache.poi.ss.usermodel.Workbook workbook) throws SheetNotFoundException {
 		return getSheetSelectionMethod().selectSheetFrom(workbook);
+	}
+
+	/**
+	 * Creates the Workbook if needed
+	 *
+	 * @return the existing or freshly created workbook
+	 * @throws IOException
+	 * @throws BiffException
+	 */
+	private jxl.Workbook getOrCreateWorkbookJXL() throws IOException, BiffException {
+		if (!hasWorkbook()) {
+			WorkbookSettings workbookSettings = new WorkbookSettings();
+			Optional.ofNullable(encoding).map(Charset::name).ifPresent(workbookSettings::setEncoding);
+			workbookJXL = Workbook.getWorkbook(getFile(), workbookSettings);
+		}
+		return workbookJXL;
 	}
 
 	/**

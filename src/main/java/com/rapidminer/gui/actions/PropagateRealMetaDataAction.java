@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -54,9 +54,6 @@ public class PropagateRealMetaDataAction extends ToggleAction {
 		} else {
 			RapidMinerGUI.getMainFrame().getProcess().setDebugMode(DebugMode.DEBUG_OFF);
 		}
-
-		// state changed, update Global Search to keep in sync
-		addToGlobalSearch();
 	}
 
 	@Override

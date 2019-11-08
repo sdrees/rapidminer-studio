@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -20,10 +20,12 @@ package com.rapidminer.tools.config.jwt;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URLConnection;
 import java.util.Base64;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rapidminer.repository.RepositoryException;
 import com.rapidminer.repository.internal.remote.RemoteRepository;
@@ -32,10 +34,32 @@ import com.rapidminer.repository.internal.remote.RemoteRepository;
 /**
  * Retrieves a {@link JwtClaim} from a {@link RemoteRepository}, which contains additional information about the user
  *
- * @since 8.1.0
  * @author Jonas Wilms-Pfau
+ * @since 8.1.0
  */
 public class JwtReader {
+
+	/**
+	 * JWT Wrapper object
+	 *
+	 * @author Jonas Wilms-Pfau
+	 * @since 8.1.0
+	 */
+	@JsonIgnoreProperties(ignoreUnknown = true)
+	private static class JwtWrapper {
+
+		private String idToken;
+
+		String getIdToken() {
+			return idToken;
+		}
+
+		public void setIdToken(String idToken) {
+			this.idToken = idToken;
+		}
+
+	}
+
 	/**
 	 * JWT Specification
 	 */
@@ -51,29 +75,34 @@ public class JwtReader {
 	 * Location of the tokenservice
 	 */
 	private static final String TOKENSERVICE_RELATIVE_URL = "internal/jaxrest/tokenservice";
+	/**
+	 * Authorization header key for a connection
+	 */
+	private static final String AUTH = "Authorization";
+	/**
+	 * Bearer for the authorization header
+	 */
+	private static final String BEARER = "Bearer ";
 
+	private ObjectMapper mapper = new ObjectMapper();
 
 	/**
 	 * Read the claim from the remote token service without verifying the signature
 	 *
 	 * <p>
-	 *     Warning: Don't use the result of this method to give access to sensitive information!
+	 * Warning: Don't use the result of this method to give access to sensitive information!
 	 * </p>
 	 *
 	 * @return JwtClaim or null
-	 *
 	 * @throws RepositoryException
 	 * @throws IOException
 	 */
 	public JwtClaim readClaim(RemoteRepository source) throws RepositoryException, IOException {
-		if (source == null) {
-			return null;
-		}
-		URLConnection connection = source.getHTTPConnection(TOKENSERVICE_RELATIVE_URL, true);
-		ObjectMapper mapper = new ObjectMapper();
-		try (InputStream inputStream = connection.getInputStream()) {
-			//First extract the outer wrapper
-			JwtWrapper wrapper = mapper.readValue(inputStream, JwtWrapper.class);
+		try {
+			JwtWrapper wrapper = loadJwtWrapper(source);
+			if (wrapper == null) {
+				return null;
+			}
 			//Split the token into header, payload and signature
 			String[] token = wrapper.getIdToken().split(JWT_SEPARATOR_REGEX);
 			//Verify the structure of the Token
@@ -87,26 +116,46 @@ public class JwtReader {
 			} else {
 				throw new RepositoryException("Invalid response from TokenService.");
 			}
+		} catch (IllegalArgumentException | JsonMappingException e) {
+			throw new RepositoryException("Invalid response from TokenService.", e);
 		}
 	}
 
-	/***
-	 * JWT Wrapper object
+	/**
+	 * Retrieve the JWT token from remote and set it on the given connection as authorization header.
 	 *
-	 * @since 8.1.0
-	 * @author Jonas Wilms-Pfau
+	 * @param repository the {@link RemoteRepository} that should be accessed
+	 * @param connection the connection to add an authorization header to
+	 * @throws IOException
+	 * @throws RepositoryException
+	 * @since 9.3
+	 * @deprecated since 9.5.0, this is a protected method in the ServerClient version 9.3.0 and can be used with a proper client implementation
 	 */
-	@JsonIgnoreProperties(ignoreUnknown = true)
-	private static class JwtWrapper {
+	@Deprecated
+	public void setJwtAuthorization(RemoteRepository repository, HttpURLConnection connection) throws IOException, RepositoryException {
+		final JwtWrapper jwtWrapper = loadJwtWrapper(repository);
+		if (jwtWrapper == null) {
+			return;
+		}
+		String token = jwtWrapper.getIdToken();
+		connection.setRequestProperty(AUTH, BEARER + token);
+	}
 
-		private String idToken;
-
-		public String getIdToken() {
-			return idToken;
+	/**
+	 * Load the JwtWrapper containing idToken and expiration date from a source repository.
+	 */
+	private JwtWrapper loadJwtWrapper(RemoteRepository source) throws IOException, RepositoryException {
+		if (source == null) {
+			return null;
+		}
+		URLConnection connection = source.getHTTPConnection(TOKENSERVICE_RELATIVE_URL, true);
+		if (connection == null) {
+			throw new RepositoryException("Could not connect to TokenService.");
 		}
 
-		public void setIdToken(String idToken) {
-			this.idToken = idToken;
+		try (InputStream inputStream = connection.getInputStream()) {
+			//First extract the outer wrapper
+			return mapper.readValue(inputStream, JwtWrapper.class);
 		}
 	}
 }

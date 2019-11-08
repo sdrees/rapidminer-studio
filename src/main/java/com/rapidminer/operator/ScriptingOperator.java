@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  *
  * Complete list of developers available at our web site:
  *
@@ -28,6 +28,9 @@ import java.util.Map;
 import org.apache.commons.lang.exception.ExceptionUtils;
 import org.codehaus.groovy.GroovyBugError;
 
+import com.rapidminer.adaption.belt.IOTable;
+import com.rapidminer.belt.table.BeltConverter;
+import com.rapidminer.core.concurrency.ConcurrencyContext;
 import com.rapidminer.operator.ProcessSetupError.Severity;
 import com.rapidminer.operator.ports.InputPortExtender;
 import com.rapidminer.operator.ports.OutputPortExtender;
@@ -36,6 +39,7 @@ import com.rapidminer.parameter.ParameterTypeBoolean;
 import com.rapidminer.parameter.ParameterTypeText;
 import com.rapidminer.parameter.TextType;
 import com.rapidminer.parameter.UndefinedParameterError;
+import com.rapidminer.studio.internal.Resources;
 import com.rapidminer.tools.plugin.Plugin;
 
 import groovy.lang.Binding;
@@ -105,13 +109,7 @@ public class ScriptingOperator extends Operator {
 	 */
 	private static class ConcurrentBindingDelegator extends Binding {
 
-		private final ThreadLocal<Binding> binding = new ThreadLocal<Binding>() {
-
-			@Override
-			protected Binding initialValue() {
-				return new Binding();
-			}
-		};
+		private final ThreadLocal<Binding> binding = ThreadLocal.withInitial(Binding::new);
 
 		@Override
 		public Object getVariable(String name) {
@@ -216,7 +214,7 @@ public class ScriptingOperator extends Operator {
 	public void doWork() throws OperatorException {
 		String script = getParameterAsString(PARAMETER_SCRIPT);
 		if (getParameterAsBoolean(PARAMETER_STANDARD_IMPORTS)) {
-			StringBuffer imports = new StringBuffer();
+			StringBuilder imports = new StringBuilder();
 			imports.append("import com.rapidminer.example.*;\n");
 			imports.append("import com.rapidminer.example.set.*;\n");
 			imports.append("import com.rapidminer.example.table.*;\n");
@@ -228,17 +226,18 @@ public class ScriptingOperator extends Operator {
 		}
 
 		List<IOObject> input = inExtender.getData(IOObject.class, false);
+		try {
+			convertIOTables(input);
+		} catch (BeltConverter.ConversionException e) {
+			throw new UserError(this, "scriptingOperator.custom_columns", e.getColumnName(), e.getType().customTypeID());
+		}
 		Object result;
 		try {
 			// cache access is synchronized on a per-script basis to prevent Execute Script
 			// inside a loop to start many parsings at the same time
 			Object lock;
 			synchronized (LOCK_MAP) {
-				lock = LOCK_MAP.get(script);
-				if (lock == null) {
-					lock = new Object();
-					LOCK_MAP.put(script, lock);
-				}
+				lock = LOCK_MAP.computeIfAbsent(script, s -> new Object());
 			}
 
 			Script cachedScript;
@@ -277,7 +276,7 @@ public class ScriptingOperator extends Operator {
 		if (result instanceof Object[]) {
 			outExtender.deliver(Arrays.asList((IOObject[]) result));
 		} else if (result instanceof List) {
-			List<IOObject> results = new LinkedList<IOObject>();
+			List<IOObject> results = new LinkedList<>();
 			for (Object single : (List<?>) result) {
 				if (single instanceof IOObject) {
 					results.add((IOObject) single);
@@ -297,11 +296,29 @@ public class ScriptingOperator extends Operator {
 		}
 	}
 
+	/**
+	 * Since the script does unchecked casts to {@link com.rapidminer.example.ExampleSet}s, we need to convert belt
+	 * tables here. Later, when more operators return belt tables, we should introduce a compatibility level for this.
+	 *
+	 * @throws BeltConverter.ConversionException
+	 * 		if a table cannot be converted because it contains custom columns
+	 */
+	private void convertIOTables(List<IOObject> input) {
+		ConcurrencyContext concurrencyContext = Resources.getConcurrencyContext(this);
+		for (int i = 0; i < input.size(); i++) {
+			IOObject object = input.get(i);
+			if (object instanceof IOTable) {
+				input.set(i, BeltConverter.convert((IOTable) object, concurrencyContext));
+			}
+		}
+	}
+
 	@Override
 	public List<ParameterType> getParameterTypes() {
 		List<ParameterType> types = super.getParameterTypes();
 		ParameterType type = new ParameterTypeText(PARAMETER_SCRIPT, "The script to execute.", TextType.GROOVY, false);
 		type.setExpert(false);
+		type.setPrimary(true);
 		type.setDefaultValue("/* \n" + " * You can use both Java and Groovy syntax in this script.\n"
 				+ " * \n * Note that you have access to the following two predefined variables:\n"
 				+ " * 1) input (an array of all input data)\n"

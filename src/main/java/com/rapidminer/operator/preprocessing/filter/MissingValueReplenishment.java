@@ -1,5 +1,5 @@
 /**
- * Copyright (C) 2001-2018 by RapidMiner and the contributors
+ * Copyright (C) 2001-2019 by RapidMiner and the contributors
  * 
  * Complete list of developers available at our web site:
  * 
@@ -42,6 +42,7 @@ import com.rapidminer.operator.ports.metadata.ExampleSetMetaData;
 import com.rapidminer.operator.ports.metadata.MDInteger;
 import com.rapidminer.operator.ports.metadata.SimpleMetaDataError;
 import com.rapidminer.parameter.ParameterType;
+import com.rapidminer.parameter.ParameterTypeDateFormat;
 import com.rapidminer.parameter.ParameterTypeString;
 import com.rapidminer.parameter.UndefinedParameterError;
 import com.rapidminer.parameter.conditions.ParameterCondition;
@@ -235,7 +236,7 @@ public class MissingValueReplenishment extends ValueReplenishment {
 				if (Ontology.ATTRIBUTE_VALUE_TYPE.isA(attribute.getValueType(), Ontology.DATE_TIME)) {
 					String formatString = null;
 					if (Ontology.ATTRIBUTE_VALUE_TYPE.isA(attribute.getValueType(), Ontology.DATE)) {
-						formatString = "MM/dd/yyyy";
+						formatString = ParameterTypeDateFormat.DATE_FORMAT_MM_DD_YYYY;
 					} else if (Ontology.ATTRIBUTE_VALUE_TYPE.isA(attribute.getValueType(), Ontology.TIME)) {
 						formatString = "hh.mm a";
 					} else if (Ontology.ATTRIBUTE_VALUE_TYPE.isA(attribute.getValueType(), Ontology.DATE_TIME)) {
